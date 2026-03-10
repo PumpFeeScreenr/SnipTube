@@ -1001,9 +1001,13 @@ function schedulePreviewSync(options = {}){
     previewReloadTimer = setTimeout(() => syncWorkerPreview(focus), options.immediate ? 0 : 80);
     return;
   }
-  if(!isYouTubeActive() || !videoId || !ytPlayerReady || !ytPlayer) return;
-  clearTimeout(ytSyncTimer);
-  ytSyncTimer = setTimeout(() => syncYouTubeToSelection(options), 120);
+  if(previewMode === 'yt'){
+    if(!isYouTubeActive() || !videoId || !ytPlayerReady || !ytPlayer) return;
+    const focus = options.focus || 'start';
+    clearTimeout(ytSyncTimer);
+    ytSyncTimer = setTimeout(() => syncYouTubePreview(focus), 120);
+    return;
+  }
 }
 
 function syncYouTubeToSelection(options = {}){
@@ -1023,6 +1027,15 @@ function syncYouTubeToSelection(options = {}){
     updatePH();
     ytPlayer.seekTo(startS, true);
   }
+}
+
+function syncYouTubePreview(focus = 'start'){
+  if(!isYouTubeActive() || !videoId || !ytPlayerReady || !ytPlayer) return;
+  const target = focus === 'end' ? endS : focus === 'current' ? curS : startS;
+  try{ ytPlayer.pauseVideo(); }catch(err){}
+  curS = clamp(target, 0, dur);
+  updatePH();
+  ytPlayer.seekTo(curS, true);
 }
 
 function startPlayTick(){
@@ -1103,7 +1116,7 @@ async function loadYouTubePreview(){
       onReady: () => {
         ytPlayerReady = true;
         ytPlayer.cueVideoById(getYouTubeCueOptions());
-        syncYouTubeToSelection({restart: false});
+        syncYouTubePreview('start');
       },
       onStateChange: handleYouTubeStateChange,
       onError: handleYouTubeError
