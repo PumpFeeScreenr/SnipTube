@@ -264,6 +264,9 @@ def ytdlp_opts(extra: dict | None = None) -> dict:
         "noplaylist": True,
         "socket_timeout": 30,
     }
+    ffmpeg = ffmpeg_binary()
+    if ffmpeg:
+        opts["ffmpeg_location"] = ffmpeg
     cookie_file = resolve_cookie_file()
     if cookie_file:
         opts["cookiefile"] = cookie_file

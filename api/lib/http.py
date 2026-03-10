@@ -38,4 +38,34 @@ def send_json(handler, code: int, payload: dict, extra_headers: dict[str, str] |
 
 
 def send_file(handler, code: int, path: Path, content_type: str, extra_headers: dict[str, str] | None = None) -> None:
-    send_bytes(handler, code, path.read_bytes(), content_type, extra_headers=extra_headers)
+    data = path.read_bytes()
+    size = len(data)
+    range_header = handler.headers.get("range", "").strip()
+    headers = {"Accept-Ranges": "bytes"}
+    if extra_headers:
+        headers.update(extra_headers)
+
+    if range_header.startswith("bytes="):
+        try:
+            raw_range = range_header.split("=", 1)[1].split(",", 1)[0]
+            start_text, end_text = raw_range.split("-", 1)
+            if start_text == "":
+                length = int(end_text)
+                start = max(0, size - length)
+                end = size - 1
+            else:
+                start = int(start_text)
+                end = int(end_text) if end_text else size - 1
+            start = max(0, start)
+            end = min(size - 1, end)
+            if start > end or start >= size:
+                send_json(handler, 416, {"error": "Requested range not satisfiable"}, {"Content-Range": f"bytes */{size}"})
+                return
+            chunk = data[start : end + 1]
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            send_bytes(handler, 206, chunk, content_type, extra_headers=headers)
+            return
+        except Exception:
+            pass
+
+    send_bytes(handler, code, data, content_type, extra_headers=headers)
