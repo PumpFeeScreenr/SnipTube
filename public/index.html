@@ -1429,6 +1429,9 @@ function attachDrag(){
 
   function endDrag(){
     if(dragState && dragState.moved) suppressTrackClickUntil = Date.now() + 180;
+    if(dragState && dragState.moved){
+      schedulePreviewSync({focus: getHandleFocus(dragState.which), immediate: true});
+    }
     leftHandle.classList.remove('dragging');
     rightHandle.classList.remove('dragging');
     hideZoomPreview();
@@ -1499,7 +1502,7 @@ function attachDrag(){
     }else{
       hideZoomPreview();
     }
-    schedulePreviewSync({focus: getHandleFocus(isDrag), immediate: true});
+    schedulePreviewSync({focus: getHandleFocus(isDrag)});
   }, {passive: false});
 
   document.addEventListener('pointerup', endDrag);
