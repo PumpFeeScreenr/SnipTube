@@ -714,12 +714,19 @@ async function initWorker(){
   }
 
   try{
-    const res = await fetch('/api/config', {cache: 'no-store'});
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    let data = null;
+    let lastStatus = 0;
+    for(const configPath of ['/api/config', '/api/config.py']){
+      const res = await fetch(configPath, {cache: 'no-store'});
+      lastStatus = res.status;
+      if(!res.ok) continue;
+      data = await res.json();
+      break;
+    }
+    if(!data) throw new Error(`HTTP ${lastStatus || 404}`);
     workerBase = String(data.workerUrl || '').replace(/\/+$/, '');
     if(!workerBase){
-      setConnectionNote('Set WORKER_URL on Vercel to enable the clip worker.', 'error');
+      setConnectionNote('Worker config is empty. Check the live Vercel worker routes.', 'error');
       return '';
     }
     setConnectionNote('Worker connected. Ready to fetch clips.', 'ok');

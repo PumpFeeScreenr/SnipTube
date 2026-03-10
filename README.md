@@ -5,14 +5,14 @@ user download the full file locally first.
 
 ## Architecture
 
-SnipTube now uses a simple split that is actually deployable:
+SnipTube supports two deployment shapes:
 
-- `public/index.html`: static frontend hosted on Vercel
-- `api/config.py`: tiny Vercel function that exposes `WORKER_URL` at runtime
-- `worker/app.py`: long-running Flask worker with `yt-dlp` and `ffmpeg`
+- `public/index.html`: frontend
+- `api/*.py`: Vercel Python functions for config, info, preview, download, and health
+- `worker/app.py`: long-running Flask worker for local development or external hosting
 
-The browser talks directly to the worker for `/api/info` and `/api/download`.
-That avoids pushing large media downloads through Vercel serverless functions.
+On Vercel, the frontend can now use same-origin `/api/*` routes directly. If
+`WORKER_URL` is set, the frontend still supports an external worker host.
 
 ## Why this shape
 
@@ -22,34 +22,25 @@ where you want long-running, high-bandwidth clip generation to happen.
 
 ## Deploy
 
-### 1. Deploy the worker
+### 1. Deploy on Vercel only
 
-Use Railway, Render, Fly.io, or any VPS that can run Docker.
+Deploy the root of this repo to Vercel. The frontend will use the same-origin
+`/api/*` routes by default.
 
-The `worker/Dockerfile` already installs `ffmpeg` and starts Gunicorn.
+Optional Vercel environment variables:
 
-Required runtime:
-
-- Python 3.11+
-- `ffmpeg`
-
-Optional worker environment variables:
-
-- `PORT`: defaults to `8000`
+- `WORKER_URL`: override the worker host instead of using same-origin routes
 - `YTDLP_COOKIES_PATH`: path to a Netscape-format cookies file
 - `YTDLP_COOKIES_B64`: base64-encoded cookies file contents
 
 The cookies options matter because Twitter/X extraction may require authenticated
 cookies depending on the video and the platform's current restrictions.
 
-### 2. Deploy the frontend to Vercel
+### 2. Optional external worker
 
-Set this environment variable in the Vercel project:
-
-- `WORKER_URL=https://your-worker-host.example.com`
-
-Then deploy the root of this repo. The frontend fetches `/api/config`, gets the
-worker URL, and calls the worker directly from the browser.
+You can still deploy `worker/app.py` separately on Railway, Render, Fly.io, or
+any VPS that can run Docker. The `worker/Dockerfile` already installs ffmpeg and
+starts Gunicorn.
 
 ### 3. Quick override for testing
 

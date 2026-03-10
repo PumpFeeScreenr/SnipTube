@@ -31,6 +31,11 @@ try:
 except ImportError:
     certifi = None
 
+try:
+    import imageio_ffmpeg
+except ImportError:
+    imageio_ffmpeg = None
+
 
 app = Flask(__name__)
 CORS(app)
@@ -209,8 +214,24 @@ def find_downloaded_media(stem: str) -> Path | None:
     return candidates[0]
 
 
+def ffmpeg_binary() -> str | None:
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    if imageio_ffmpeg is None:
+        return None
+    try:
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        log.exception("Failed to resolve bundled ffmpeg")
+        return None
+
+
 def check_ffmpeg() -> None:
-    result = subprocess.run(["ffmpeg", "-version"], capture_output=True)
+    ffmpeg = ffmpeg_binary()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required on the worker host")
+    result = subprocess.run([ffmpeg, "-version"], capture_output=True)
     if result.returncode != 0:
         raise RuntimeError("ffmpeg is required on the worker host")
 
@@ -315,7 +336,12 @@ def parse_clip_range(start: float | None, end: float | None, duration: float, fm
 
 
 def run_ffmpeg(cmd: list[str]) -> tuple[bool, str]:
-    result = subprocess.run(cmd, capture_output=True)
+    ffmpeg = ffmpeg_binary()
+    if not ffmpeg:
+        return False, "ffmpeg executable is not available"
+    normalized = list(cmd)
+    normalized[0] = ffmpeg
+    result = subprocess.run(normalized, capture_output=True)
     if result.returncode != 0:
         return False, result.stderr.decode(errors="replace")[-1200:]
     return True, ""
