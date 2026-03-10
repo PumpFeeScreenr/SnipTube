@@ -823,7 +823,7 @@ function destroyWorkerPreview(options = {}){
 
 function ensureZoomPreviewLoaded(){
   const video = $('zoom-preview-video');
-  if(!video || !currentUrl || !workerBase) return null;
+  if(!video || !currentUrl || !workerBase || previewMode !== 'worker') return null;
 
   if(!video._bound){
     video._bound = true;
@@ -1083,7 +1083,32 @@ function handleYouTubeError(){
 }
 
 async function loadYouTubePreview(){
-  await loadWorkerPreview({focus: 'start'});
+  if(!currentUrl || !videoId) return;
+
+  destroyWorkerPreview();
+  destroyYouTubePlayer();
+
+  previewMode = 'yt';
+  ytPlayerReady = false;
+
+  const preview = $('vid-preview');
+  preview.style.display = 'block';
+  preview.innerHTML = '<div id="yt-player-slot"></div>';
+
+  const YT = await ensureYouTubeApi();
+  ytPlayer = new YT.Player('yt-player-slot', {
+    videoId,
+    playerVars: getYouTubePlayerVars(),
+    events: {
+      onReady: () => {
+        ytPlayerReady = true;
+        ytPlayer.cueVideoById(getYouTubeCueOptions());
+        syncYouTubeToSelection({restart: false});
+      },
+      onStateChange: handleYouTubeStateChange,
+      onError: handleYouTubeError
+    }
+  });
 }
 
 function setPlat(nextPlat){
@@ -1192,7 +1217,11 @@ async function renderEditor(info, sourceUrl){
   preview.style.display = 'block';
   twitterNotice.style.display = 'none';
   $('tw-orig-link').href = currentUrl;
-  await loadWorkerPreview({focus: 'start'});
+  if(isYT && videoId){
+    await loadYouTubePreview();
+  }else{
+    await loadWorkerPreview({focus: 'start'});
+  }
 
   $('editor').style.display = 'block';
   setFmt(fmt);
@@ -1321,7 +1350,7 @@ function showZoomPreview(options){
   $('zoom-min').textContent = fmtT(windowStart, {fractionDigits: TIME_PRECISION});
   $('zoom-max').textContent = fmtT(windowEnd, {fractionDigits: TIME_PRECISION});
   $('zoom-meta').textContent = `${(Math.max(1, (dur || span) / span)).toFixed(1)}x precision · ${fmtSpan(span)} window`;
-  syncZoomPreview(activeTime);
+  if(previewMode === 'worker') syncZoomPreview(activeTime);
   $('zoom-sel').style.left = Math.min(startPct, endPct) + '%';
   $('zoom-sel').style.width = Math.max(0, endPct - startPct) + '%';
   $('zoom-start-marker').style.left = startPct + '%';
