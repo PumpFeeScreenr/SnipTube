@@ -1544,7 +1544,7 @@ function attachDrag(){
     }else{
       hideZoomPreview();
     }
-    schedulePreviewSync({focus: getHandleFocus(isDrag)});
+    schedulePreviewSync({focus: getHandleFocus(isDrag), immediate: true});
   }, {passive: false});
 
   document.addEventListener('pointerup', endDrag);
