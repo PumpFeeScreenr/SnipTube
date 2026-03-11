@@ -20,7 +20,6 @@ from worker.app import (
     encode_media,
     fetch_info,
     find_downloaded_media,
-    is_youtube_info,
     make_gif,
     normalize_media_info,
     parse_clip_range,
@@ -77,11 +76,6 @@ class handler(BaseHTTPRequestHandler):
         duration = float(info.get("duration") or 0)
         try:
             start, end = parse_clip_range(start, end, duration, fmt)
-            if is_youtube_info(info) and duration > 300 and not window["windowed"]:
-                raise ValueError(
-                    "Videos longer than 5 minutes must use a time-marked YouTube URL. "
-                    "Use 'Copy video URL at current time' and try again."
-                )
             if window["windowed"]:
                 start, end = clamp_range_to_window(start, end, window["window_start"], window["window_end"])
         except ValueError as exc:

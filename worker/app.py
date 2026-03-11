@@ -51,7 +51,7 @@ TMPDIR = Path(tempfile.gettempdir()) / "sniptube"
 TMPDIR.mkdir(exist_ok=True)
 
 GIF_MAX_SEC = 30
-YOUTUBE_WINDOW_MAX_SEC = 300
+YOUTUBE_WINDOW_MAX_SEC = 600
 PREVIEW_CACHE_TTL_SEC = 1800
 PREVIEW_PROFILE = "preview"
 ALLOWED_MEDIA_PROXY_HOSTS = {"video.twimg.com"}
@@ -448,20 +448,11 @@ def resolve_youtube_window(url: str, info: dict) -> dict:
     if not is_youtube_info(info) or duration <= 0:
         return result
 
-    if duration <= YOUTUBE_WINDOW_MAX_SEC or initial_seek is None:
-        return result
+    if duration > YOUTUBE_WINDOW_MAX_SEC:
+        raise ValueError("Videos longer than 10 minutes are not supported.")
 
-    max_start = max(0.0, duration - YOUTUBE_WINDOW_MAX_SEC)
-    window_start = min(max(0.0, initial_seek), max_start)
-    window_end = min(duration, window_start + YOUTUBE_WINDOW_MAX_SEC)
-    result.update(
-        {
-            "initial_seek": window_start,
-            "window_start": window_start,
-            "window_end": window_end,
-            "windowed": True,
-        }
-    )
+    if initial_seek is None:
+        return result
     return result
 
 
@@ -817,11 +808,6 @@ def api_download():
     duration = float(info.get("duration") or 0)
     try:
         start, end = parse_clip_range(start, end, duration, fmt)
-        if is_youtube_info(info) and duration > YOUTUBE_WINDOW_MAX_SEC and not window["windowed"]:
-            raise ValueError(
-                "Videos longer than 5 minutes must use a time-marked YouTube URL. "
-                "Use 'Copy video URL at current time' and try again."
-            )
         if window["windowed"]:
             start, end = clamp_range_to_window(start, end, window["window_start"], window["window_end"])
     except ValueError as exc:

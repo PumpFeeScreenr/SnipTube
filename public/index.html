@@ -56,9 +56,8 @@ h1 em{font-style:normal;color:var(--accent)}
 .url-btn:hover{background:#d4eb30}
 .url-btn:active{transform:scale(.98)}
 .url-btn:disabled{background:#2a2a2a;color:var(--muted);cursor:not-allowed}
-.hero-note{margin:12px auto 0;max-width:640px;font-family:'DM Mono',monospace;font-size:.72rem;color:var(--muted);line-height:1.5}
-.hero-note.ok{color:rgba(232,255,71,.82)}
-.hero-note.error{color:#ff8b95}
+.hero-note{display:none;margin:12px auto 0;max-width:640px;font-family:'DM Mono',monospace;font-size:.72rem;color:var(--muted);line-height:1.5}
+.hero-note.error{display:block;color:#ff8b95}
 
 /* LOADING */
 #loading{display:none;text-align:center;padding:56px}
@@ -432,7 +431,7 @@ const PREVIEW_STOP_EPSILON = 0.025;
 const TIME_PRECISION = 3;
 const PREVIEW_METADATA_TIMEOUT_MS = 12000;
 const DIRECT_PREVIEW_METADATA_TIMEOUT_MS = 25000;
-const YOUTUBE_WINDOW_MAX_SEC = 300;
+const YOUTUBE_WINDOW_MAX_SEC = 600;
 const DRAG_ZOOM_THRESHOLD_PX = 0;
 const DRAG_ZOOM_MAX_LIFT_PX = 220;
 const DRAG_ZOOM_MIN_WINDOW_SEC = 1.2;
@@ -791,13 +790,14 @@ function buildYouTubeFallbackInfo(url){
   };
 }
 
-function defaultConnectionMessage(){
-  return 'Users can upload videos up to 5 minutes. Videos longer than that must be timestamped ("Copy video URL at current time").';
-}
-
 function setConnectionNote(message, type = ''){
   const note = $('conn-note');
   if(!note) return;
+  if(type !== 'error' || !message){
+    note.textContent = '';
+    note.className = 'hero-note';
+    return;
+  }
   note.textContent = message;
   note.className = 'hero-note' + (type ? ' ' + type : '');
 }
@@ -851,13 +851,13 @@ async function initWorker(){
       return '';
     }
     workerBase = overrideUrl;
-    setConnectionNote(`Worker override active: ${workerBase}`, 'ok');
+    setConnectionNote('', '');
     return workerBase;
   }
 
   if(window.location.protocol === 'file:' || LOCAL_HOSTS.has(window.location.hostname)){
     workerBase = LOCAL_WORKER_URL;
-    setConnectionNote(`Local mode: expecting worker at ${workerBase}`, 'ok');
+    setConnectionNote('', '');
     return workerBase;
   }
 
@@ -877,7 +877,7 @@ async function initWorker(){
       setConnectionNote('Worker config is empty. Check the live Vercel worker routes.', 'error');
       return '';
     }
-    setConnectionNote(defaultConnectionMessage(), 'ok');
+    setConnectionNote('', '');
     return workerBase;
   }catch(err){
     setConnectionNote('Worker config unavailable. Check /api/config and WORKER_URL.', 'error');
@@ -926,7 +926,7 @@ async function checkWorkerHealth(){
       setConnectionNote('Worker is missing ffmpeg. Downloads are unavailable.', 'error');
       return false;
     }
-    setConnectionNote(defaultConnectionMessage(), 'ok');
+    setConnectionNote('', '');
     return true;
   }catch(err){
     setConnectionNote('Worker health check failed. Downloads may be degraded.', 'error');
@@ -1482,7 +1482,7 @@ async function loadVideo(){
     const fallbackInfo = !looksTwitter(url) && isBotCheckError(err.message) ? buildYouTubeFallbackInfo(url) : null;
     if(fallbackInfo){
       $('loading').style.display = 'none';
-      setConnectionNote('YouTube metadata is blocked by the backend. Loading editor from the embedded player instead.', 'ok');
+      setConnectionNote('', '');
       await renderEditor(fallbackInfo, url);
       return;
     }
@@ -1547,17 +1547,12 @@ async function renderEditor(info, sourceUrl){
   twitterNotice.style.display = 'none';
   $('tw-orig-link').href = currentUrl;
   if(isYT){
-    if(hasClipWindowLimit()){
-      setConnectionNote(`Preview limited to a ${fmtSelectionSpan(clipWindowEnd - clipWindowStart)} window from ${fmtT(clipWindowStart)}.`, 'ok');
-    }
     await loadYouTubePreview();
   } else if(shouldSkipPreview(sourceUrl)){
     showPreviewFallback('', '');
-    setConnectionNote('Hosted mode: X preview is disabled to keep exports responsive.', 'ok');
+    setConnectionNote('', '');
   } else {
-    if(directPreviewUrl){
-      setConnectionNote('Direct X preview loaded from the source video.', 'ok');
-    }
+    setConnectionNote('', '');
     await loadWorkerPreview({focus: 'start'});
   }
 
