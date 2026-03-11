@@ -777,6 +777,10 @@ function buildYouTubeFallbackInfo(url){
   };
 }
 
+function defaultConnectionMessage(){
+  return 'Users can upload videos up to 5 minutes. Videos longer than that must be timestamped ("Copy video URL at current time").';
+}
+
 function setConnectionNote(message, type = ''){
   const note = $('conn-note');
   if(!note) return;
@@ -805,7 +809,7 @@ function setThumbFromVideoFrame(video){
 }
 
 function resetThumb(){
-  $('vid-thumb').src = baseThumbUrl || '';
+  $('vid-thumb').removeAttribute('src');
 }
 
 async function initWorker(){
@@ -848,7 +852,7 @@ async function initWorker(){
       setConnectionNote('Worker config is empty. Check the live Vercel worker routes.', 'error');
       return '';
     }
-    setConnectionNote('Worker connected. Ready to fetch clips.', 'ok');
+    setConnectionNote(defaultConnectionMessage(), 'ok');
     return workerBase;
   }catch(err){
     setConnectionNote('Worker config unavailable. Check /api/config and WORKER_URL.', 'error');
@@ -897,11 +901,7 @@ async function checkWorkerHealth(){
       setConnectionNote('Worker is missing ffmpeg. Downloads are unavailable.', 'error');
       return false;
     }
-    if(!workerOverride && isSameOriginWorker() && !data.cookies){
-      setConnectionNote('Worker is healthy. YouTube exports may still fail without cookies.', 'ok');
-      return true;
-    }
-    setConnectionNote('Worker connected. Ready to fetch clips.', 'ok');
+    setConnectionNote(defaultConnectionMessage(), 'ok');
     return true;
   }catch(err){
     setConnectionNote('Worker health check failed. Downloads may be degraded.', 'error');
@@ -1161,9 +1161,12 @@ async function loadWorkerPreview(options = {}){
     video.currentTime = target;
     curS = target;
     updatePH();
-    if(!dragState || dragState.which === 'l') setThumbFromVideoFrame(video);
     ensureZoomPreviewLoaded();
     if(autoplay) video.play().catch(() => {});
+  });
+  video.addEventListener('loadeddata', () => {
+    if(loadToken !== previewLoadToken) return;
+    if(!dragState || dragState.which === 'l') setThumbFromVideoFrame(video);
   });
   video.addEventListener('seeked', () => {
     if(!dragState || dragState.which === 'l') setThumbFromVideoFrame(video);
@@ -1353,17 +1356,10 @@ async function loadYouTubePreview(){
           if(!clipWindowEnd || clipWindowEnd > nextDuration) clipWindowEnd = nextDuration;
           if(wasAtFullEnd) endS = getClipWindowEnd();
         }
-        if(nextDuration > YOUTUBE_WINDOW_MAX_SEC && !hasClipWindowLimit() && !getYouTubeUrlStart(currentUrl)){
-          toast('Videos longer than 5 minutes require a time-marked YouTube URL. Use \"Copy video URL at current time\".', 'error');
-          setConnectionNote('Long YouTube videos require a time-marked URL in hosted mode.', 'error');
-          goHome('yt');
-          return;
-        }
         const videoData = typeof event.target.getVideoData === 'function' ? event.target.getVideoData() : null;
         if(videoData){
           if(videoData.title) $('vid-title').textContent = videoData.title;
           if(videoData.author) $('vid-channel').textContent = videoData.author;
-          if(videoData.video_id && !$('vid-thumb').src) $('vid-thumb').src = `https://i.ytimg.com/vi/${videoData.video_id}/hqdefault.jpg`;
         }
         $('vid-dur-label').textContent = dur > 0 ? `Duration: ${fmtT(dur)}` : 'Duration: --';
         startS = clamp(startS, getClipWindowStart(), Math.max(getClipWindowStart(), getClipWindowEnd() - MIN_CLIP_SEC));

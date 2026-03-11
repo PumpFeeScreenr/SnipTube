@@ -381,14 +381,8 @@ def resolve_youtube_window(url: str, info: dict) -> dict:
     if not is_youtube_info(info) or duration <= 0:
         return result
 
-    if duration <= YOUTUBE_WINDOW_MAX_SEC:
+    if duration <= YOUTUBE_WINDOW_MAX_SEC or initial_seek is None:
         return result
-
-    if initial_seek is None:
-        raise ValueError(
-            "Videos longer than 5 minutes require a time-marked YouTube URL. "
-            "Use 'Copy video URL at current time' and try again."
-        )
 
     max_start = max(0.0, duration - YOUTUBE_WINDOW_MAX_SEC)
     window_start = min(max(0.0, initial_seek), max_start)
@@ -750,6 +744,11 @@ def api_download():
     duration = float(info.get("duration") or 0)
     try:
         start, end = parse_clip_range(start, end, duration, fmt)
+        if is_youtube_info(info) and duration > YOUTUBE_WINDOW_MAX_SEC and not window["windowed"]:
+            raise ValueError(
+                "Videos longer than 5 minutes must use a time-marked YouTube URL. "
+                "Use 'Copy video URL at current time' and try again."
+            )
         if window["windowed"]:
             start, end = clamp_range_to_window(start, end, window["window_start"], window["window_end"])
     except ValueError as exc:
