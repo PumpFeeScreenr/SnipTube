@@ -647,13 +647,18 @@ function updateDownloadUi(){
   const qualityLabel = getQualityPreset().label;
   const snippetBytes = estimateDownloadBytes(endS - startS);
   const fullBytes = estimateDownloadBytes(hasClipWindowLimit() ? (clipWindowEnd - clipWindowStart) : dur);
+  const sizeLabel = fmt === 'gif'
+    ? `Projected size: ${fmtBytes(snippetBytes)}`
+    : hasClipWindowLimit()
+      ? `Projected size: snippet ${fmtBytes(snippetBytes)} · window ${fmtBytes(fullBytes)}`
+      : `Projected size: snippet ${fmtBytes(snippetBytes)} · full ${fmtBytes(fullBytes)}`;
   $('dl-snip-btn').textContent = `✂ Download ${fmtLabel} Snippet`;
   $('dl-full-btn').textContent = hasClipWindowLimit()
     ? `⬇ Download ${fmtSelectionSpan(clipWindowEnd - clipWindowStart)} Window`
     : `⬇ Download Full ${fmtLabel}`;
   $('dl-estimate').innerHTML = fmt === 'gif'
-    ? `${qualityLabel} quality<br/>Snippet export<br/>Projected size: ${fmtBytes(snippetBytes)}`
-    : `${qualityLabel} quality<br/>${hasClipWindowLimit() ? 'Window export' : 'Snippet + full export'}<br/>Projected size: ${fmtBytes(snippetBytes)}${hasClipWindowLimit() ? '' : ` · full ${fmtBytes(fullBytes)}`}`;
+    ? `${qualityLabel} quality<br/>Snippet export<br/>${sizeLabel}`
+    : `${qualityLabel} quality<br/>${hasClipWindowLimit() ? 'Window export' : 'Snippet + full export'}<br/>${sizeLabel}`;
 }
 function waveSeed(){
   return [...(videoId || currentUrl || '42')].reduce((sum, char) => sum + char.charCodeAt(0), 0) || 42;
