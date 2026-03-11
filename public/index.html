@@ -79,6 +79,13 @@ h1 em{font-style:normal;color:var(--accent)}
 #vid-preview{width:100%;height:100%;display:block}
 #vid-preview iframe{width:100%;height:100%;border:0;display:block}
 #vid-preview video{width:100%;height:100%;display:block;background:#000}
+.preview-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}
+.preview-toggle{display:flex;gap:6px;flex-wrap:wrap}
+.preview-toggle button{border:1px solid var(--border);background:var(--surface);color:var(--text);padding:6px 10px;border-radius:999px;font-size:.74rem;letter-spacing:.02em}
+.preview-toggle button.active{border-color:rgba(232,255,71,.75);box-shadow:0 0 0 1px rgba(232,255,71,.25)}
+.preview-status{font-family:'DM Mono',monospace;font-size:.7rem;color:var(--muted)}
+.preview-status.loading{color:rgba(232,255,71,.9)}
+.preview-status.error{color:#ff8b95}
 .twitter-notice{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#000;color:var(--muted);font-family:'DM Mono',monospace;font-size:.78rem;text-align:center;padding:20px}
 .twitter-notice svg{opacity:.4}
 .twitter-notice a{color:var(--twitter);text-decoration:none}
@@ -265,6 +272,13 @@ h1 em{font-style:normal;color:var(--accent)}
           <span>Twitter embeds are restricted.<br/>
           <a id="tw-orig-link" href="#" target="_blank" rel="noopener">Open original tweet ↗</a></span>
         </div>
+      </div>
+      <div class="preview-controls">
+        <div class="preview-toggle" role="group" aria-label="Preview mode">
+          <button id="preview-auto" class="active" onclick="setPreviewPreference('auto')">Auto</button>
+          <button id="preview-accurate" onclick="setPreviewPreference('accurate')">Accurate</button>
+        </div>
+        <div class="preview-status" id="preview-status">Preview ready</div>
       </div>
     </div>
 
@@ -498,6 +512,8 @@ let ytApiPromise = null;
 let ytSyncTimer = null;
 let previewMode = 'none';
 let previewReloadTimer = null;
+let previewPreference = 'auto';
+let previewStatus = 'Preview ready';
 let workerPreviewPendingSeek = null;
 let dragState = null;
 let zoomPreviewPendingSeek = null;
@@ -641,6 +657,42 @@ function setDownloadButtons(disabled){
 function setAllButtons(disabled){
   setLoadButton(disabled);
   setDownloadButtons(disabled);
+}
+
+function setPreviewStatus(message, type = ''){
+  previewStatus = message;
+  const el = $('preview-status');
+  if(!el) return;
+  el.textContent = message;
+  el.className = 'preview-status' + (type ? ' ' + type : '');
+}
+
+function setPreviewPreference(next){
+  previewPreference = next === 'accurate' ? 'accurate' : 'auto';
+  $('preview-auto').classList.toggle('active', previewPreference === 'auto');
+  $('preview-accurate').classList.toggle('active', previewPreference === 'accurate');
+  try{
+    window.localStorage.setItem('sniptube:preview-mode', previewPreference);
+  }catch(err){}
+  setPreviewStatus(previewPreference === 'accurate' ? 'Accurate preview enabled.' : 'Auto preview enabled.');
+  if(currentUrl && dur > 0){
+    reloadPreviewForSelection('start');
+  }
+}
+
+function restorePreviewPreference(){
+  try{
+    const stored = window.localStorage.getItem('sniptube:preview-mode');
+    if(stored === 'accurate') previewPreference = 'accurate';
+  }catch(err){}
+  $('preview-auto').classList.toggle('active', previewPreference === 'auto');
+  $('preview-accurate').classList.toggle('active', previewPreference === 'accurate');
+}
+
+function resolvePreviewMode(){
+  if(!currentUrl) return 'none';
+  if(previewPreference === 'accurate') return 'worker';
+  return looksTwitter(currentUrl) ? 'worker' : 'yt';
 }
 
 function persistCachedUrl(value){
@@ -814,6 +866,10 @@ function destroyYouTubePlayer(){
     try{ ytPlayer.destroy(); }catch(err){}
   }
   ytPlayer = null;
+  if(ytZoomPlayer && typeof ytZoomPlayer.destroy === 'function'){
+    try{ ytZoomPlayer.destroy(); }catch(err){}
+  }
+  ytZoomPlayer = null;
   $('vid-preview').innerHTML = '';
 }
 
@@ -968,6 +1024,17 @@ function ensureYouTubeApi(){
   return ytApiPromise;
 }
 
+async function reloadPreviewForSelection(focus = 'start'){
+  const nextMode = resolvePreviewMode();
+  if(nextMode === 'worker'){
+    await loadWorkerPreview({focus});
+    return;
+  }
+  if(nextMode === 'yt'){
+    await loadYouTubePreview();
+  }
+}
+
 async function loadWorkerPreview(options = {}){
   if(!currentUrl || !workerBase) return;
 
@@ -981,6 +1048,7 @@ async function loadWorkerPreview(options = {}){
   workerPreviewPendingSeek = getPreviewSeekTarget(focus);
   showZoomMediaForMode();
   ytZoomPendingSeek = null;
+  setPreviewStatus('Generating preview…', 'loading');
 
   preview.style.display = 'block';
   preview.innerHTML = '<video id=\"worker-preview\" controls playsinline preload=\"metadata\"></video>';
@@ -990,6 +1058,7 @@ async function loadWorkerPreview(options = {}){
   ensureZoomPreviewLoaded();
 
   video.addEventListener('loadedmetadata', () => {
+    setPreviewStatus('Preview ready');
     const previousDuration = dur;
     if(Number.isFinite(video.duration) && video.duration > 0){
       const wasAtFullEnd = Math.abs(endS - previousDuration) < 0.25;
@@ -1040,7 +1109,11 @@ async function loadWorkerPreview(options = {}){
     clearPlayTick();
   });
   video.addEventListener('error', () => {
+    setPreviewStatus('Preview failed to load.', 'error');
     toast('Generated preview failed to load.', 'error');
+    if(previewPreference === 'auto' && isYouTubeActive()){
+      loadYouTubePreview();
+    }
   });
 
   video.src = previewUrl;
@@ -1157,6 +1230,7 @@ function handleYouTubeStateChange(event){
 
 function handleYouTubeError(){
   const code = arguments[0] && typeof arguments[0].data === 'number' ? arguments[0].data : null;
+  setPreviewStatus('YouTube preview error. Switching to worker…', 'error');
   loadWorkerPreview({
     autoplay: false,
     focus: 'current',
@@ -1174,6 +1248,7 @@ async function loadYouTubePreview(){
   ytPlayerReady = false;
   showZoomMediaForMode();
   ytZoomPendingSeek = null;
+  setPreviewStatus('Loading YouTube preview…', 'loading');
 
   const preview = $('vid-preview');
   preview.style.display = 'block';
@@ -1191,6 +1266,7 @@ async function loadYouTubePreview(){
         if(ytZoomPlayer && typeof ytZoomPlayer.cueVideoById === 'function'){
           ytZoomPlayer.cueVideoById(getYouTubeCueOptions());
         }
+        setPreviewStatus('Preview ready');
       },
       onStateChange: handleYouTubeStateChange,
       onError: handleYouTubeError
@@ -1257,6 +1333,7 @@ async function loadVideo(){
     } else {
       setAllButtons(false);
     }
+    setPreviewStatus('Preview unavailable.', 'error');
     toast('Error: ' + err.message, 'error');
   }finally{
     setLoadButton(false);
@@ -1304,11 +1381,7 @@ async function renderEditor(info, sourceUrl){
   preview.style.display = 'block';
   twitterNotice.style.display = 'none';
   $('tw-orig-link').href = currentUrl;
-  if(isYT && videoId){
-    await loadYouTubePreview();
-  }else{
-    await loadWorkerPreview({focus: 'start'});
-  }
+  await reloadPreviewForSelection('start');
 
   $('editor').style.display = 'block';
   setFmt(fmt);
@@ -1470,6 +1543,7 @@ function goHome(nextPlat = plat){
   $('tw-notice').style.display = 'none';
   setLoadButton(false);
   resetDownloadUi();
+  setPreviewStatus('Preview ready');
   window.scrollTo({top: 0, behavior: 'smooth'});
   window.setTimeout(() => $('yt-url').focus(), 160);
 }
@@ -1809,6 +1883,8 @@ async function doDownload(isSnip){
 }
 
 restoreCachedUrl();
+restorePreviewPreference();
+setPreviewStatus('Preview ready');
 attachDrag();
 updateTL();
 updatePH();
