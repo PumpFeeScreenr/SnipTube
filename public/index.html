@@ -786,6 +786,11 @@ function shouldSkipPreview(url = currentUrl){
   return isSameOriginWorker() && !workerOverride && !directPreviewUrl;
 }
 
+function healthUrl(){
+  if(isSameOriginWorker() && !workerOverride) return `${workerBase}/api/health`;
+  return `${workerBase}/health`;
+}
+
 const configReady = initWorker();
 
 async function checkWorkerHealth(){
@@ -793,7 +798,7 @@ async function checkWorkerHealth(){
   if(!workerBase) return false;
 
   try{
-    const res = await fetch(apiUrl('/health'), {cache: 'no-store'});
+    const res = await fetch(healthUrl(), {cache: 'no-store'});
     const data = await res.json().catch(() => ({}));
     if(!res.ok || data.status !== 'ok'){
       setConnectionNote('Worker health check failed. Downloads may be degraded.', 'error');
