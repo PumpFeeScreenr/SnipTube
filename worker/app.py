@@ -18,9 +18,11 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
-from flask import Flask, after_this_request, jsonify, request, send_file
+from flask import Flask, Response, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
 
 try:
@@ -52,6 +54,7 @@ GIF_MAX_SEC = 30
 YOUTUBE_WINDOW_MAX_SEC = 300
 PREVIEW_CACHE_TTL_SEC = 1800
 PREVIEW_PROFILE = "preview"
+ALLOWED_MEDIA_PROXY_HOSTS = {"video.twimg.com"}
 
 IGNORED_DOWNLOAD_SUFFIXES = (
     ".description",
@@ -337,6 +340,49 @@ def normalize_media_info(info: dict) -> tuple[dict, int | None]:
     merged["entries"] = entries
     merged["_playlist_entry_index"] = playlist_index
     return merged, playlist_index if isinstance(playlist_index, int) else None
+
+
+def is_allowed_media_proxy_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    return parsed.scheme == "https" and parsed.hostname in ALLOWED_MEDIA_PROXY_HOSTS
+
+
+def fetch_remote_media(url: str, range_header: str | None = None) -> tuple[int, bytes, dict[str, str]]:
+    if not is_allowed_media_proxy_url(url):
+        raise ValueError("Unsupported preview media URL")
+
+    headers = {"User-Agent": "SnipTube/1.0"}
+    if range_header:
+        headers["Range"] = range_header
+
+    req = Request(url, headers=headers)
+    try:
+        with urlopen(req, timeout=30) as response:
+            status = getattr(response, "status", 200)
+            body = response.read()
+            response_headers = {
+                "Content-Type": response.headers.get("Content-Type", "video/mp4"),
+                "Accept-Ranges": response.headers.get("Accept-Ranges", "bytes"),
+                "Cache-Control": response.headers.get("Cache-Control", "public, max-age=300"),
+            }
+            if response.headers.get("Content-Length"):
+                response_headers["Content-Length"] = response.headers["Content-Length"]
+            if response.headers.get("Content-Range"):
+                response_headers["Content-Range"] = response.headers["Content-Range"]
+            return status, body, response_headers
+    except HTTPError as exc:
+        body = exc.read()
+        response_headers = {
+            "Content-Type": exc.headers.get("Content-Type", "application/octet-stream"),
+        }
+        if exc.headers.get("Content-Range"):
+            response_headers["Content-Range"] = exc.headers["Content-Range"]
+        return exc.code, body, response_headers
+    except URLError as exc:
+        raise RuntimeError(f"Failed to fetch preview media: {exc.reason}") from exc
 
 
 def parse_time_marker(value: str | None) -> float | None:
@@ -883,6 +929,26 @@ def api_preview():
             return jsonify({"error": "Preview output is missing after processing"}), 500
         temp_out.replace(cache_file)
     return send_file(str(cache_file), mimetype="video/mp4", as_attachment=False, conditional=True)
+
+
+@app.route("/api/x_preview")
+def api_x_preview():
+    media_url = request.args.get("media_url", "").strip()
+    if not media_url:
+        return jsonify({"error": "Missing media_url"}), 400
+
+    try:
+        status, body, headers = fetch_remote_media(media_url, request.headers.get("Range"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    response = Response(body, status=status)
+    for key, value in headers.items():
+        response.headers[key] = value
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
 
 
 @app.route("/health")

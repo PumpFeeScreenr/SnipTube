@@ -952,7 +952,9 @@ function getPreviewSeekTarget(focus = 'start'){
 }
 
 function getPreviewAssetUrl(){
-  if(directPreviewUrl) return directPreviewUrl;
+  if(directPreviewUrl){
+    return `${apiUrl('/api/x_preview')}?media_url=${encodeURIComponent(directPreviewUrl)}`;
+  }
   return `${apiUrl('/api/preview')}?url=${encodeURIComponent(currentUrl)}`;
 }
 
