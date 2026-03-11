@@ -86,8 +86,6 @@ h1 em{font-style:normal;color:var(--accent)}
 
 /* META PANEL */
 .meta-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;display:flex;flex-direction:column;gap:14px}
-.video-thumb{display:none;width:100%;border-radius:8px;aspect-ratio:16/9;object-fit:cover;background:var(--surface2)}
-.video-thumb.has-frame{display:block}
 .platform-badge{display:inline-flex;align-items:center;gap:5px;font-family:'DM Mono',monospace;font-size:.68rem;padding:3px 10px;border-radius:99px;letter-spacing:.06em}
 .platform-badge.yt{background:rgba(255,0,0,.12);color:#ff4444;border:1px solid rgba(255,0,0,.2)}
 .platform-badge.tw{background:rgba(29,155,240,.12);color:var(--twitter);border:1px solid rgba(29,155,240,.2)}
@@ -272,7 +270,6 @@ h1 em{font-style:normal;color:var(--accent)}
 
     <!-- META -->
     <div class="meta-panel">
-      <img class="video-thumb" id="vid-thumb" src="" alt=""/>
       <div>
         <span class="platform-badge yt" id="plat-badge">YouTube</span>
       </div>
@@ -811,7 +808,9 @@ function ensureThumbCaptureCanvas(){
 }
 
 function setThumbVisibility(visible){
-  $('vid-thumb').classList.toggle('has-frame', Boolean(visible));
+  const thumb = $('vid-thumb');
+  if(!thumb) return;
+  thumb.classList.toggle('has-frame', Boolean(visible));
 }
 
 function setThumbFromVideoFrame(video){
@@ -825,13 +824,16 @@ function setThumbFromVideoFrame(video){
     const ctx = canvas.getContext('2d');
     if(!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    $('vid-thumb').src = canvas.toDataURL('image/jpeg', 0.82);
+    const thumb = $('vid-thumb');
+    if(!thumb) return;
+    thumb.src = canvas.toDataURL('image/jpeg', 0.82);
     setThumbVisibility(true);
   }catch(err){}
 }
 
 function resetThumb(){
-  $('vid-thumb').removeAttribute('src');
+  const thumb = $('vid-thumb');
+  if(thumb) thumb.removeAttribute('src');
   setThumbVisibility(false);
 }
 
