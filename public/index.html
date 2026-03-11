@@ -1984,12 +1984,24 @@ function togglePlay(){
       ytPlayer.pauseVideo();
       return;
     }
-    if(curS < startS || curS >= endS - 0.1){
-      curS = startS;
-      updatePH();
-      ytPlayer.seekTo(startS, true);
+    clearTimeout(ytFramePrimeTimer);
+    ytFramePrimeTimer = null;
+    ytFramePrimeActive = false;
+    const target = (curS < startS || curS >= endS - 0.1) ? startS : curS;
+    curS = target;
+    updatePH();
+    try{
+      ytPlayer.loadVideoById({
+        videoId,
+        startSeconds: target,
+        endSeconds: Math.ceil(endS),
+        suggestedQuality: 'large'
+      });
+      ytPlayer.playVideo();
+    }catch(err){
+      ytPlayer.seekTo(target, true);
+      ytPlayer.playVideo();
     }
-    ytPlayer.playVideo();
     return;
   }
 
