@@ -701,7 +701,7 @@ function isYouTubeActive(){return Boolean(currentUrl) && !looksTwitter(currentUr
 function looksYouTube(url){return /(?:youtube\.com\/watch|youtube\.com\/shorts\/|youtu\.be\/)/.test(String(url || '').trim())}
 function isSupportedUrl(url){return looksYouTube(url) || looksTwitter(url)}
 function isBotCheckError(message){
-  return /sign in to confirm you're not a bot|cookies-from-browser|use --cookies/i.test(String(message || ''));
+  return /sign in to confirm you're not a bot|cookies-from-browser|use --cookies|youtube is blocking automated export right now/i.test(String(message || ''));
 }
 function formatApiError(message, url = currentUrl){
   const text = String(message || '').trim();
@@ -1322,7 +1322,7 @@ async function loadVideo(){
   try{
     const res = await fetch(`${apiUrl('/api/info')}?url=${encodeURIComponent(url)}`);
     const data = await res.json();
-    if(!res.ok || data.error) throw new Error(formatApiError(data.error || 'Failed to fetch video info', url));
+    if(!res.ok || data.error) throw new Error(data.error || 'Failed to fetch video info');
     $('loading').style.display = 'none';
     await renderEditor(data, url);
   }catch(err){
