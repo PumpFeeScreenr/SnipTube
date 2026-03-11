@@ -711,6 +711,19 @@ function formatApiError(message, url = currentUrl){
   }
   return text;
 }
+function buildYouTubeFallbackInfo(url){
+  const id = extractYTId(url);
+  if(!id) return null;
+  return {
+    id,
+    title: 'YouTube video',
+    channel: '',
+    duration: 0,
+    thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    platform: 'Youtube',
+    previewUrl: null,
+  };
+}
 
 function setConnectionNote(message, type = ''){
   const note = $('conn-note');
@@ -1232,7 +1245,23 @@ async function loadYouTubePreview(){
     events: {
       onReady: event => {
         ytPlayerReady = true;
+        const nextDuration = Number(event.target.getDuration ? event.target.getDuration() : 0) || 0;
+        if(nextDuration > 0){
+          const wasAtFullEnd = dur <= 0 || Math.abs(endS - dur) < 0.25;
+          dur = nextDuration;
+          if(wasAtFullEnd) endS = nextDuration;
+        }
+        const videoData = typeof event.target.getVideoData === 'function' ? event.target.getVideoData() : null;
+        if(videoData){
+          if(videoData.title) $('vid-title').textContent = videoData.title;
+          if(videoData.author) $('vid-channel').textContent = videoData.author;
+          if(videoData.video_id && !$('vid-thumb').src) $('vid-thumb').src = `https://i.ytimg.com/vi/${videoData.video_id}/hqdefault.jpg`;
+        }
+        $('vid-dur-label').textContent = dur > 0 ? `Duration: ${fmtT(dur)}` : 'Duration: --';
         curS = startS;
+        buildRuler();
+        drawWave();
+        updateTL();
         updatePH();
         event.target.cueVideoById(getYouTubeCueOptions());
       },
@@ -1297,6 +1326,13 @@ async function loadVideo(){
     $('loading').style.display = 'none';
     await renderEditor(data, url);
   }catch(err){
+    const fallbackInfo = !looksTwitter(url) && isBotCheckError(err.message) ? buildYouTubeFallbackInfo(url) : null;
+    if(fallbackInfo){
+      $('loading').style.display = 'none';
+      setConnectionNote('YouTube metadata is blocked by the backend. Loading editor from the embedded player instead.', 'ok');
+      await renderEditor(fallbackInfo, url);
+      return;
+    }
     $('loading').style.display = 'none';
     if(editorWasVisible && currentUrl && dur > 0){
       $('editor').style.display = 'block';
@@ -1322,7 +1358,7 @@ $('yt-url').addEventListener('input', event => {
 
 async function renderEditor(info, sourceUrl){
   const nextDuration = Number(info.duration) || 0;
-  if(nextDuration <= 0){
+  if(nextDuration <= 0 && looksTwitter(sourceUrl)){
     toast('Could not determine the video duration for clipping.', 'error');
     return;
   }
@@ -1339,7 +1375,7 @@ async function renderEditor(info, sourceUrl){
 
   $('vid-title').textContent = info.title || 'Untitled';
   $('vid-channel').textContent = info.channel || '';
-  $('vid-dur-label').textContent = `Duration: ${fmtT(dur)}`;
+  $('vid-dur-label').textContent = dur > 0 ? `Duration: ${fmtT(dur)}` : 'Duration: --';
   $('vid-thumb').src = info.thumb || '';
 
   const isYT = !looksTwitter(currentUrl);
@@ -1369,9 +1405,11 @@ async function renderEditor(info, sourceUrl){
   $('editor').style.display = 'block';
   setFmt(fmt);
   setAllButtons(false);
-  buildRuler();
-  drawWave();
-  updateTL();
+  if(dur > 0){
+    buildRuler();
+    drawWave();
+    updateTL();
+  }
   updatePH();
   attachDrag();
   window.scrollTo({top: $('editor').offsetTop - 24, behavior: 'smooth'});
