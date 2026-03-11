@@ -651,9 +651,9 @@ function updateDownloadUi(){
   $('dl-full-btn').textContent = hasClipWindowLimit()
     ? `⬇ Download ${fmtSelectionSpan(clipWindowEnd - clipWindowStart)} Window`
     : `⬇ Download Full ${fmtLabel}`;
-  $('dl-estimate').textContent = fmt === 'gif'
-    ? `${qualityLabel} quality · est. ${fmtBytes(snippetBytes)}`
-    : `${qualityLabel} quality · snippet est. ${fmtBytes(snippetBytes)} · full est. ${fmtBytes(fullBytes)}`;
+  $('dl-estimate').innerHTML = fmt === 'gif'
+    ? `${qualityLabel} quality<br/>Snippet export<br/>Projected size: ${fmtBytes(snippetBytes)}`
+    : `${qualityLabel} quality<br/>${hasClipWindowLimit() ? 'Window export' : 'Snippet + full export'}<br/>Projected size: ${fmtBytes(snippetBytes)}${hasClipWindowLimit() ? '' : ` · full ${fmtBytes(fullBytes)}`}`;
 }
 function waveSeed(){
   return [...(videoId || currentUrl || '42')].reduce((sum, char) => sum + char.charCodeAt(0), 0) || 42;
@@ -1711,7 +1711,7 @@ function updateTL(){
   $('handle-l').style.left = `${leftPx}px`;
   $('handle-r').style.left = `${rightPx}px`;
 
-  const clipSpan = fmtSpan(endS - startS);
+  const clipSpan = fmtSelectionSpan(endS - startS);
   const selectionSpan = fmtSelectionSpan(endS - startS);
   $('sel-readout').textContent = `${fmtClipT(startS)} → ${fmtClipT(endS)} · ${clipSpan}`;
   $('dl-range').innerHTML = `<span>${fmtClipT(startS)}</span> → <span>${fmtClipT(endS)}</span> · ${selectionSpan}`;
