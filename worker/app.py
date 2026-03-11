@@ -18,6 +18,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
@@ -48,6 +49,7 @@ TMPDIR = Path(tempfile.gettempdir()) / "sniptube"
 TMPDIR.mkdir(exist_ok=True)
 
 GIF_MAX_SEC = 30
+YOUTUBE_WINDOW_MAX_SEC = 300
 PREVIEW_CACHE_TTL_SEC = 1800
 PREVIEW_PROFILE = "preview"
 
@@ -316,6 +318,112 @@ def fetch_info(url: str) -> dict:
         return ydl.extract_info(url, download=False)
 
 
+def parse_time_marker(value: str | None) -> float | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+        return float(raw)
+
+    pattern = re.compile(r"(?:(?P<h>\d+(?:\.\d+)?)h)?(?:(?P<m>\d+(?:\.\d+)?)m)?(?:(?P<s>\d+(?:\.\d+)?)s?)?")
+    match = pattern.fullmatch(raw)
+    if not match:
+        return None
+
+    hours = float(match.group("h") or 0)
+    minutes = float(match.group("m") or 0)
+    seconds = float(match.group("s") or 0)
+    total = (hours * 3600) + (minutes * 60) + seconds
+    return total if total > 0 else None
+
+
+def extract_youtube_start(url: str) -> float | None:
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    fragment = parsed.fragment.strip()
+
+    for key in ("t", "start"):
+        values = query.get(key) or []
+        if values:
+            parsed_value = parse_time_marker(values[0])
+            if parsed_value is not None:
+                return parsed_value
+
+    if fragment:
+        fragment_query = parse_qs(fragment)
+        for key in ("t", "start"):
+            values = fragment_query.get(key) or []
+            if values:
+                parsed_value = parse_time_marker(values[0])
+                if parsed_value is not None:
+                    return parsed_value
+        parsed_value = parse_time_marker(fragment)
+        if parsed_value is not None:
+            return parsed_value
+
+    return None
+
+
+def is_youtube_info(info: dict) -> bool:
+    return (info.get("extractor_key") or "").lower() == "youtube"
+
+
+def resolve_youtube_window(url: str, info: dict) -> dict:
+    duration = max(0.0, float(info.get("duration") or 0))
+    initial_seek = extract_youtube_start(url)
+
+    result = {
+        "initial_seek": None if initial_seek is None else max(0.0, initial_seek),
+        "window_start": 0.0,
+        "window_end": duration,
+        "windowed": False,
+    }
+    if not is_youtube_info(info) or duration <= 0:
+        return result
+
+    if duration <= YOUTUBE_WINDOW_MAX_SEC:
+        return result
+
+    if initial_seek is None:
+        raise ValueError(
+            "Videos longer than 5 minutes require a time-marked YouTube URL. "
+            "Use 'Copy video URL at current time' and try again."
+        )
+
+    max_start = max(0.0, duration - YOUTUBE_WINDOW_MAX_SEC)
+    window_start = min(max(0.0, initial_seek), max_start)
+    window_end = min(duration, window_start + YOUTUBE_WINDOW_MAX_SEC)
+    result.update(
+        {
+            "initial_seek": window_start,
+            "window_start": window_start,
+            "window_end": window_end,
+            "windowed": True,
+        }
+    )
+    return result
+
+
+def clamp_range_to_window(
+    start: float | None,
+    end: float | None,
+    window_start: float,
+    window_end: float,
+) -> tuple[float | None, float | None]:
+    if start is None and end is None:
+        return window_start, window_end
+
+    next_start = window_start if start is None else max(window_start, start)
+    next_end = window_end if end is None else min(window_end, end)
+    if next_start >= window_end:
+        raise ValueError("Clip start must stay within the 5-minute YouTube window.")
+    if next_end <= window_start:
+        raise ValueError("Clip end must stay within the 5-minute YouTube window.")
+    if next_end <= next_start:
+        raise ValueError("Clip range must stay inside the 5-minute YouTube window.")
+    return next_start, next_end
+
+
 def select_preview_url(info: dict) -> str | None:
     if (info.get("extractor_key") or "").lower() != "twitter":
         return None
@@ -358,7 +466,16 @@ def get_quality_profile(fmt: str, quality: str) -> dict:
     return profile
 
 
-def download_media(url: str, raw_tmpl: str, profile: str, quality: str) -> None:
+def download_media(
+    url: str,
+    raw_tmpl: str,
+    profile: str,
+    quality: str,
+    *,
+    info: dict | None = None,
+    range_start: float | None = None,
+    range_end: float | None = None,
+) -> None:
     if profile == PREVIEW_PROFILE:
         download_opts = {
             "format": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360][ext=mp4]/best[height<=360]/best[ext=mp4]/best",
@@ -374,6 +491,16 @@ def download_media(url: str, raw_tmpl: str, profile: str, quality: str) -> None:
         merge_output_format = profile_opts.get("merge_output_format")
         if merge_output_format:
             download_opts["merge_output_format"] = merge_output_format
+
+    if (
+        info
+        and is_youtube_info(info)
+        and range_start is not None
+        and range_end is not None
+        and range_end > range_start
+    ):
+        download_opts["download_ranges"] = yt_dlp.utils.download_range_func(None, [(range_start, range_end)])
+        download_opts["force_keyframes_at_cuts"] = True
 
     with yt_dlp.YoutubeDL(ytdlp_opts(download_opts)) as ydl:
         ydl.download([url])
@@ -571,6 +698,9 @@ def api_info():
 
     try:
         info = fetch_info(url)
+        window = resolve_youtube_window(url, info)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except yt_dlp.utils.DownloadError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -586,6 +716,10 @@ def api_info():
             "thumb": info.get("thumbnail"),
             "platform": info.get("extractor_key", ""),
             "previewUrl": select_preview_url(info),
+            "initialSeek": window["initial_seek"],
+            "clipWindowStart": window["window_start"],
+            "clipWindowEnd": window["window_end"],
+            "windowed": window["windowed"],
         }
     )
 
@@ -607,12 +741,17 @@ def api_download():
 
     try:
         info = fetch_info(url)
+        window = resolve_youtube_window(url, info)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": f"Metadata lookup failed: {exc}"}), 400
 
     duration = float(info.get("duration") or 0)
     try:
         start, end = parse_clip_range(start, end, duration, fmt)
+        if window["windowed"]:
+            start, end = clamp_range_to_window(start, end, window["window_start"], window["window_end"])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -625,7 +764,15 @@ def api_download():
     out_file = TMPDIR / f"out_{uid}.{fmt}"
 
     try:
-        download_media(url, raw_tmpl, fmt, quality)
+        download_media(
+            url,
+            raw_tmpl,
+            fmt,
+            quality,
+            info=info,
+            range_start=window["window_start"] if window["windowed"] else None,
+            range_end=window["window_end"] if window["windowed"] else None,
+        )
     except Exception as exc:
         cleanup_prefix(raw_stem, 5)
         return jsonify({"error": f"Download failed: {exc}"}), 500

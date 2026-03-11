@@ -429,6 +429,7 @@ const PREVIEW_STOP_EPSILON = 0.025;
 const TIME_PRECISION = 3;
 const PREVIEW_METADATA_TIMEOUT_MS = 12000;
 const DIRECT_PREVIEW_METADATA_TIMEOUT_MS = 25000;
+const YOUTUBE_WINDOW_MAX_SEC = 300;
 const DRAG_ZOOM_THRESHOLD_PX = 0;
 const DRAG_ZOOM_MAX_LIFT_PX = 220;
 const DRAG_ZOOM_MIN_WINDOW_SEC = 1.2;
@@ -500,6 +501,8 @@ let previewLoadToken = 0;
 let workerPreviewPendingSeek = null;
 let directPreviewUrl = '';
 let baseThumbUrl = '';
+let clipWindowStart = 0;
+let clipWindowEnd = 0;
 let thumbCaptureCanvas = null;
 let dragState = null;
 let zoomPreviewPendingSeek = null;
@@ -573,11 +576,50 @@ function fmtBytes(bytes){
 function toTimeParam(seconds){
   return Math.max(0, Number(seconds) || 0).toFixed(TIME_PRECISION).replace(/\.?0+$/, '');
 }
+function parseTimeMarker(value){
+  const raw = String(value || '').trim().toLowerCase();
+  if(!raw) return null;
+  if(/^\d+(\.\d+)?$/.test(raw)) return parseFloat(raw);
+  const match = raw.match(/^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s?)?$/);
+  if(!match) return null;
+  const hours = parseFloat(match[1] || '0');
+  const minutes = parseFloat(match[2] || '0');
+  const seconds = parseFloat(match[3] || '0');
+  const total = (hours * 3600) + (minutes * 60) + seconds;
+  return total > 0 ? total : null;
+}
+function getYouTubeUrlStart(url){
+  try{
+    const parsed = new URL(String(url || '').trim());
+    for(const key of ['t', 'start']){
+      const value = parsed.searchParams.get(key);
+      const seconds = parseTimeMarker(value);
+      if(seconds !== null) return seconds;
+    }
+    const fragment = String(parsed.hash || '').replace(/^#/, '');
+    if(fragment){
+      const fragmentParams = new URLSearchParams(fragment);
+      for(const key of ['t', 'start']){
+        const value = fragmentParams.get(key);
+        const seconds = parseTimeMarker(value);
+        if(seconds !== null) return seconds;
+      }
+      const seconds = parseTimeMarker(fragment);
+      if(seconds !== null) return seconds;
+    }
+  }catch(err){}
+  return null;
+}
 function getHandleFocus(which){return which === 'l' ? 'start' : 'end'}
 function getHandleValue(which){return which === 'l' ? startS : endS}
+function hasClipWindowLimit(){return clipWindowEnd > clipWindowStart && (clipWindowStart > 0 || clipWindowEnd < dur)}
+function getClipWindowStart(){return hasClipWindowLimit() ? clipWindowStart : 0}
+function getClipWindowEnd(){return hasClipWindowLimit() ? clipWindowEnd : dur}
 function setHandleValue(which, seconds){
-  if(which === 'l') startS = clamp(seconds, 0, endS - MIN_CLIP_SEC);
-  else endS = clamp(seconds, startS + MIN_CLIP_SEC, dur);
+  const minBound = getClipWindowStart();
+  const maxBound = getClipWindowEnd();
+  if(which === 'l') startS = clamp(seconds, minBound, Math.max(minBound, endS - MIN_CLIP_SEC));
+  else endS = clamp(seconds, Math.min(maxBound, startS + MIN_CLIP_SEC), maxBound);
 }
 function getPrecisionRatio(liftPx){
   return clamp((liftPx - DRAG_ZOOM_THRESHOLD_PX) / (DRAG_ZOOM_MAX_LIFT_PX - DRAG_ZOOM_THRESHOLD_PX), 0, 1);
@@ -604,9 +646,11 @@ function updateDownloadUi(){
   const fmtLabel = FORMAT_LABELS[fmt] || fmt.toUpperCase();
   const qualityLabel = getQualityPreset().label;
   const snippetBytes = estimateDownloadBytes(endS - startS);
-  const fullBytes = estimateDownloadBytes(dur);
+  const fullBytes = estimateDownloadBytes(hasClipWindowLimit() ? (clipWindowEnd - clipWindowStart) : dur);
   $('dl-snip-btn').textContent = `✂ Download ${fmtLabel} Snippet`;
-  $('dl-full-btn').textContent = `⬇ Download Full ${fmtLabel}`;
+  $('dl-full-btn').textContent = hasClipWindowLimit()
+    ? `⬇ Download ${fmtSelectionSpan(clipWindowEnd - clipWindowStart)} Window`
+    : `⬇ Download Full ${fmtLabel}`;
   $('dl-estimate').textContent = fmt === 'gif'
     ? `${qualityLabel} quality · est. ${fmtBytes(snippetBytes)}`
     : `${qualityLabel} quality · snippet est. ${fmtBytes(snippetBytes)} · full est. ${fmtBytes(fullBytes)}`;
@@ -716,6 +760,7 @@ function formatApiError(message, url = currentUrl){
 }
 function buildYouTubeFallbackInfo(url){
   const id = extractYTId(url);
+  const initialSeek = getYouTubeUrlStart(url);
   if(!id) return null;
   return {
     id,
@@ -725,6 +770,10 @@ function buildYouTubeFallbackInfo(url){
     thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
     platform: 'Youtube',
     previewUrl: null,
+    initialSeek,
+    clipWindowStart: 0,
+    clipWindowEnd: 0,
+    windowed: false,
   };
 }
 
@@ -873,8 +922,10 @@ function setPlayState(nextState){
 }
 
 function getPreviewRange(){
-  const start = Math.max(0, startS);
-  const end = Math.max(start + MIN_CLIP_SEC, endS);
+  const minBound = getClipWindowStart();
+  const maxBound = getClipWindowEnd();
+  const start = clamp(startS, minBound, Math.max(minBound, maxBound - MIN_CLIP_SEC));
+  const end = clamp(endS, start + MIN_CLIP_SEC, maxBound);
   return {start, end};
 }
 
@@ -1098,9 +1149,10 @@ async function loadWorkerPreview(options = {}){
     if(Number.isFinite(video.duration) && video.duration > 0){
       const wasAtFullEnd = Math.abs(endS - previousDuration) < 0.25;
       dur = video.duration;
-      if(wasAtFullEnd) endS = dur;
-      startS = clamp(startS, 0, Math.max(dur - MIN_CLIP_SEC, 0));
-      endS = clamp(endS, startS + MIN_CLIP_SEC, dur);
+      clipWindowEnd = hasClipWindowLimit() ? Math.min(clipWindowEnd, dur) : dur;
+      if(wasAtFullEnd) endS = getClipWindowEnd();
+      startS = clamp(startS, getClipWindowStart(), Math.max(getClipWindowStart(), getClipWindowEnd() - MIN_CLIP_SEC));
+      endS = clamp(endS, startS + MIN_CLIP_SEC, getClipWindowEnd());
       buildRuler();
       drawWave();
       updateTL();
@@ -1298,7 +1350,14 @@ async function loadYouTubePreview(){
         if(nextDuration > 0){
           const wasAtFullEnd = dur <= 0 || Math.abs(endS - dur) < 0.25;
           dur = nextDuration;
-          if(wasAtFullEnd) endS = nextDuration;
+          if(!clipWindowEnd || clipWindowEnd > nextDuration) clipWindowEnd = nextDuration;
+          if(wasAtFullEnd) endS = getClipWindowEnd();
+        }
+        if(nextDuration > YOUTUBE_WINDOW_MAX_SEC && !hasClipWindowLimit() && !getYouTubeUrlStart(currentUrl)){
+          toast('Videos longer than 5 minutes require a time-marked YouTube URL. Use \"Copy video URL at current time\".', 'error');
+          setConnectionNote('Long YouTube videos require a time-marked URL in hosted mode.', 'error');
+          goHome('yt');
+          return;
         }
         const videoData = typeof event.target.getVideoData === 'function' ? event.target.getVideoData() : null;
         if(videoData){
@@ -1307,7 +1366,9 @@ async function loadYouTubePreview(){
           if(videoData.video_id && !$('vid-thumb').src) $('vid-thumb').src = `https://i.ytimg.com/vi/${videoData.video_id}/hqdefault.jpg`;
         }
         $('vid-dur-label').textContent = dur > 0 ? `Duration: ${fmtT(dur)}` : 'Duration: --';
-        curS = startS;
+        startS = clamp(startS, getClipWindowStart(), Math.max(getClipWindowStart(), getClipWindowEnd() - MIN_CLIP_SEC));
+        endS = clamp(endS, startS + MIN_CLIP_SEC, getClipWindowEnd());
+        curS = clamp(curS || startS, getClipWindowStart(), getClipWindowEnd());
         buildRuler();
         drawWave();
         updateTL();
@@ -1414,9 +1475,12 @@ async function renderEditor(info, sourceUrl){
 
   currentUrl = sourceUrl;
   dur = nextDuration;
-  startS = 0;
-  endS = dur;
-  curS = 0;
+  clipWindowStart = Math.max(0, Number(info.clipWindowStart) || 0);
+  clipWindowEnd = Math.max(clipWindowStart, Number(info.clipWindowEnd) || dur);
+  const initialSeek = Math.max(0, Number(info.initialSeek) || 0);
+  startS = initialSeek;
+  endS = hasClipWindowLimit() ? clipWindowEnd : dur;
+  curS = startS;
   directPreviewUrl = looksTwitter(sourceUrl) ? String(info.previewUrl || '').trim() : '';
   previewMode = 'none';
   setPlayState(false);
@@ -1440,7 +1504,12 @@ async function renderEditor(info, sourceUrl){
   twitterNotice.style.display = 'none';
   $('tw-orig-link').href = currentUrl;
   if(isYT){
-    setConnectionNote('Preview running through the YouTube player. Export can still be blocked by YouTube.', 'ok');
+    setConnectionNote(
+      hasClipWindowLimit()
+        ? `Preview limited to a ${fmtSelectionSpan(clipWindowEnd - clipWindowStart)} window from ${fmtT(clipWindowStart)}.`
+        : 'Preview running through the YouTube player. Export can still be blocked by YouTube.',
+      'ok'
+    );
     await loadYouTubePreview();
   } else if(shouldSkipPreview(sourceUrl)){
     showPreviewFallback('', '');
@@ -1490,7 +1559,7 @@ function setQuality(nextQuality){
 
 function enforceGifMax(){
   if(endS - startS > GIF_MAX){
-    endS = Math.min(dur, startS + GIF_MAX);
+    endS = Math.min(getClipWindowEnd(), startS + GIF_MAX);
   }
   $('gif-warn').style.display = endS - startS > GIF_MAX ? 'block' : 'none';
   updateTL();
@@ -1602,6 +1671,8 @@ function goHome(nextPlat = plat){
   videoId = '';
   directPreviewUrl = '';
   baseThumbUrl = '';
+  clipWindowStart = 0;
+  clipWindowEnd = 0;
   dur = 0;
   startS = 0;
   endS = 0;
@@ -1781,8 +1852,11 @@ function onTimeInput(which){
     return;
   }
 
-  if(which === 'start') startS = clamp(seconds, 0, endS - MIN_CLIP_SEC);
-  else endS = clamp(seconds, startS + MIN_CLIP_SEC, dur);
+  if(which === 'start'){
+    startS = clamp(seconds, getClipWindowStart(), Math.max(getClipWindowStart(), endS - MIN_CLIP_SEC));
+  }else{
+    endS = clamp(seconds, Math.min(getClipWindowEnd(), startS + MIN_CLIP_SEC), getClipWindowEnd());
+  }
   if(fmt === 'gif') enforceGifMax();
   else updateTL();
   schedulePreviewSync({focus: which === 'start' ? 'start' : 'end', immediate: true});

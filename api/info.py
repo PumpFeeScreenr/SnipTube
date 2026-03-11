@@ -7,7 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from api.lib.http import query_params, rate_limit_check, send_json
-from worker.app import fetch_info, select_preview_url
+from worker.app import fetch_info, resolve_youtube_window, select_preview_url
 
 
 class handler(BaseHTTPRequestHandler):
@@ -29,6 +29,10 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             info = fetch_info(url)
+            window = resolve_youtube_window(url, info)
+        except ValueError as exc:
+            send_json(self, 400, {"error": str(exc)}, {"Cache-Control": "no-store"})
+            return
         except Exception as exc:
             send_json(self, 400, {"error": str(exc)}, {"Cache-Control": "no-store"})
             return
@@ -44,6 +48,10 @@ class handler(BaseHTTPRequestHandler):
                 "thumb": info.get("thumbnail"),
                 "platform": info.get("extractor_key", ""),
                 "previewUrl": select_preview_url(info),
+                "initialSeek": window["initial_seek"],
+                "clipWindowStart": window["window_start"],
+                "clipWindowEnd": window["window_end"],
+                "windowed": window["windowed"],
             },
             {"Cache-Control": "no-store"},
         )

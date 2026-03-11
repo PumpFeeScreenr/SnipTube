@@ -13,6 +13,7 @@ from worker.app import (
     GIF_MAX_SEC,
     QUALITY_PROFILES,
     TMPDIR,
+    clamp_range_to_window,
     cleanup_file,
     cleanup_prefix,
     download_media,
@@ -21,6 +22,7 @@ from worker.app import (
     find_downloaded_media,
     make_gif,
     parse_clip_range,
+    resolve_youtube_window,
     safe_name,
 )
 
@@ -61,6 +63,10 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             info = fetch_info(url)
+            window = resolve_youtube_window(url, info)
+        except ValueError as exc:
+            send_json(self, 400, {"error": str(exc)}, {"Cache-Control": "no-store"})
+            return
         except Exception as exc:
             send_json(self, 400, {"error": f"Metadata lookup failed: {exc}"}, {"Cache-Control": "no-store"})
             return
@@ -68,6 +74,8 @@ class handler(BaseHTTPRequestHandler):
         duration = float(info.get("duration") or 0)
         try:
             start, end = parse_clip_range(start, end, duration, fmt)
+            if window["windowed"]:
+                start, end = clamp_range_to_window(start, end, window["window_start"], window["window_end"])
         except ValueError as exc:
             send_json(self, 400, {"error": str(exc)}, {"Cache-Control": "no-store"})
             return
@@ -81,7 +89,15 @@ class handler(BaseHTTPRequestHandler):
         out_file = TMPDIR / f"out_{uid}.{fmt}"
 
         try:
-            download_media(url, raw_tmpl, fmt, quality)
+            download_media(
+                url,
+                raw_tmpl,
+                fmt,
+                quality,
+                info=info,
+                range_start=window["window_start"] if window["windowed"] else None,
+                range_end=window["window_end"] if window["windowed"] else None,
+            )
         except Exception as exc:
             cleanup_prefix(raw_stem, 5)
             send_json(self, 500, {"error": f"Download failed: {exc}"}, {"Cache-Control": "no-store"})
