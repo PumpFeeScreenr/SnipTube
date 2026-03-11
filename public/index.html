@@ -1505,12 +1505,9 @@ async function renderEditor(info, sourceUrl){
   twitterNotice.style.display = 'none';
   $('tw-orig-link').href = currentUrl;
   if(isYT){
-    setConnectionNote(
-      hasClipWindowLimit()
-        ? `Preview limited to a ${fmtSelectionSpan(clipWindowEnd - clipWindowStart)} window from ${fmtT(clipWindowStart)}.`
-        : 'Preview running through the YouTube player. Export can still be blocked by YouTube.',
-      'ok'
-    );
+    if(hasClipWindowLimit()){
+      setConnectionNote(`Preview limited to a ${fmtSelectionSpan(clipWindowEnd - clipWindowStart)} window from ${fmtT(clipWindowStart)}.`, 'ok');
+    }
     await loadYouTubePreview();
   } else if(shouldSkipPreview(sourceUrl)){
     showPreviewFallback('', '');
