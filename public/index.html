@@ -428,6 +428,7 @@ const MIN_CLIP_SEC = 0.05;
 const PREVIEW_STOP_EPSILON = 0.025;
 const TIME_PRECISION = 3;
 const PREVIEW_METADATA_TIMEOUT_MS = 12000;
+const DIRECT_PREVIEW_METADATA_TIMEOUT_MS = 25000;
 const DRAG_ZOOM_THRESHOLD_PX = 0;
 const DRAG_ZOOM_MAX_LIFT_PX = 220;
 const DRAG_ZOOM_MIN_WINDOW_SEC = 1.2;
@@ -888,6 +889,17 @@ function getPreviewAssetUrl(){
   return `${apiUrl('/api/preview')}?url=${encodeURIComponent(currentUrl)}`;
 }
 
+function configurePreviewVideoElement(video, {direct = false} = {}){
+  if(!video) return;
+  if(direct){
+    video.crossOrigin = 'anonymous';
+    video.referrerPolicy = 'no-referrer';
+  }else{
+    video.removeAttribute('crossorigin');
+    video.removeAttribute('referrerpolicy');
+  }
+}
+
 function getYouTubePlayerVars(){
   const range = getPreviewRange();
   const vars = {
@@ -964,6 +976,7 @@ function ensureZoomPreviewLoaded(){
     try{ video.pause(); }catch(err){}
     video.removeAttribute('src');
     video.load();
+    configurePreviewVideoElement(video, {direct: Boolean(directPreviewUrl)});
     video.src = nextSrc;
     video.load();
   }
@@ -1051,6 +1064,7 @@ async function loadWorkerPreview(options = {}){
   const {autoplay = false, focus = autoplay ? 'current' : 'start'} = options;
   const preview = $('vid-preview');
   const isTwitter = looksTwitter(currentUrl);
+  const isDirectPreview = Boolean(directPreviewUrl);
 
   destroyYouTubePlayer();
   destroyWorkerPreview({resetPendingSeek: false, invalidateToken: false});
@@ -1064,6 +1078,7 @@ async function loadWorkerPreview(options = {}){
 
   const video = document.getElementById('worker-preview');
   const previewUrl = getPreviewAssetUrl();
+  configurePreviewVideoElement(video, {direct: isDirectPreview});
   clearTimeout(previewLoadTimer);
   previewLoadTimer = window.setTimeout(() => {
     if(loadToken !== previewLoadToken || previewMode !== 'worker') return;
@@ -1073,7 +1088,7 @@ async function loadWorkerPreview(options = {}){
         : 'Preview timed out. Try reloading the link.',
       'error'
     );
-  }, PREVIEW_METADATA_TIMEOUT_MS);
+  }, isDirectPreview ? DIRECT_PREVIEW_METADATA_TIMEOUT_MS : PREVIEW_METADATA_TIMEOUT_MS);
 
   video.addEventListener('loadedmetadata', () => {
     if(loadToken !== previewLoadToken) return;
