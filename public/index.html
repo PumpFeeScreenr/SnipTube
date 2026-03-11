@@ -514,6 +514,7 @@ let previewMode = 'none';
 let previewReloadTimer = null;
 let previewPreference = 'auto';
 let previewStatus = 'Preview ready';
+let cookiesConfigured = null;
 let workerPreviewPendingSeek = null;
 let dragState = null;
 let zoomPreviewPendingSeek = null;
@@ -667,6 +668,10 @@ function setPreviewStatus(message, type = ''){
   el.className = 'preview-status' + (type ? ' ' + type : '');
 }
 
+function isBotCheckError(message){
+  return /sign in to confirm you.*not a bot/i.test(message || '');
+}
+
 function setPreviewPreference(next){
   previewPreference = next === 'accurate' ? 'accurate' : 'auto';
   $('preview-auto').classList.toggle('active', previewPreference === 'auto');
@@ -692,7 +697,8 @@ function restorePreviewPreference(){
 function resolvePreviewMode(){
   if(!currentUrl) return 'none';
   if(previewPreference === 'accurate') return 'worker';
-  return looksTwitter(currentUrl) ? 'worker' : 'yt';
+  if(looksTwitter(currentUrl)) return 'worker';
+  return 'yt';
 }
 
 function persistCachedUrl(value){
@@ -789,6 +795,16 @@ async function initWorker(){
       return '';
     }
     setConnectionNote('Worker connected. Ready to fetch clips.', 'ok');
+    try{
+      const health = await fetch(apiUrl('/api/health'), {cache: 'no-store'});
+      if(health.ok){
+        const info = await health.json();
+        cookiesConfigured = Boolean(info.cookies);
+        if(!cookiesConfigured){
+          setPreviewStatus('YouTube downloads may require cookies on the server.', 'error');
+        }
+      }
+    }catch(err){}
     return workerBase;
   }catch(err){
     setConnectionNote('Worker config unavailable. Check /api/config and WORKER_URL.', 'error');
@@ -1333,8 +1349,13 @@ async function loadVideo(){
     } else {
       setAllButtons(false);
     }
-    setPreviewStatus('Preview unavailable.', 'error');
-    toast('Error: ' + err.message, 'error');
+    if(isBotCheckError(err.message)){
+      setPreviewStatus('YouTube requires server cookies for this video.', 'error');
+      toast('YouTube bot-check: server cookies required.', 'error');
+    }else{
+      setPreviewStatus('Preview unavailable.', 'error');
+      toast('Error: ' + err.message, 'error');
+    }
   }finally{
     setLoadButton(false);
   }
@@ -1875,7 +1896,12 @@ async function doDownload(isSnip){
       return;
     }
     resetDownloadUi();
-    toast('Download failed: ' + err.message, 'error');
+    if(isBotCheckError(err.message)){
+      setPreviewStatus('YouTube requires server cookies for this video.', 'error');
+      toast('YouTube bot-check: server cookies required.', 'error');
+    }else{
+      toast('Download failed: ' + err.message, 'error');
+    }
   }finally{
     if(activeDownloadController === controller) activeDownloadController = null;
     setAllButtons(false);
