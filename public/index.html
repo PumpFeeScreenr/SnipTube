@@ -498,6 +498,8 @@ let previewLoadTimer = null;
 let previewLoadToken = 0;
 let workerPreviewPendingSeek = null;
 let directPreviewUrl = '';
+let baseThumbUrl = '';
+let thumbCaptureCanvas = null;
 let dragState = null;
 let zoomPreviewPendingSeek = null;
 let zoomPreviewSrc = '';
@@ -732,6 +734,30 @@ function setConnectionNote(message, type = ''){
   note.className = 'hero-note' + (type ? ' ' + type : '');
 }
 
+function ensureThumbCaptureCanvas(){
+  if(!thumbCaptureCanvas) thumbCaptureCanvas = document.createElement('canvas');
+  return thumbCaptureCanvas;
+}
+
+function setThumbFromVideoFrame(video){
+  if(!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+  try{
+    const canvas = ensureThumbCaptureCanvas();
+    const targetWidth = 480;
+    const scale = targetWidth / video.videoWidth;
+    canvas.width = targetWidth;
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    const ctx = canvas.getContext('2d');
+    if(!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    $('vid-thumb').src = canvas.toDataURL('image/jpeg', 0.82);
+  }catch(err){}
+}
+
+function resetThumb(){
+  $('vid-thumb').src = baseThumbUrl || '';
+}
+
 async function initWorker(){
   if(workerOverride){
     let overrideUrl = '';
@@ -925,6 +951,10 @@ function ensureZoomPreviewLoaded(){
       const target = clamp(zoomPreviewPendingSeek, 0, video.duration || dur || zoomPreviewPendingSeek);
       video.currentTime = target;
     });
+    video.addEventListener('seeked', () => {
+      if(!dragState || dragState.which !== 'l') return;
+      setThumbFromVideoFrame(video);
+    });
   }
 
   const nextSrc = getPreviewAssetUrl();
@@ -1064,8 +1094,12 @@ async function loadWorkerPreview(options = {}){
     video.currentTime = target;
     curS = target;
     updatePH();
+    if(!dragState || dragState.which === 'l') setThumbFromVideoFrame(video);
     ensureZoomPreviewLoaded();
     if(autoplay) video.play().catch(() => {});
+  });
+  video.addEventListener('seeked', () => {
+    if(!dragState || dragState.which === 'l') setThumbFromVideoFrame(video);
   });
   video.addEventListener('timeupdate', () => {
     if(loadToken !== previewLoadToken) return;
@@ -1376,7 +1410,8 @@ async function renderEditor(info, sourceUrl){
   $('vid-title').textContent = info.title || 'Untitled';
   $('vid-channel').textContent = info.channel || '';
   $('vid-dur-label').textContent = dur > 0 ? `Duration: ${fmtT(dur)}` : 'Duration: --';
-  $('vid-thumb').src = info.thumb || '';
+  baseThumbUrl = info.thumb || '';
+  resetThumb();
 
   const isYT = !looksTwitter(currentUrl);
   const badge = $('plat-badge');
@@ -1551,6 +1586,7 @@ function goHome(nextPlat = plat){
   currentUrl = '';
   videoId = '';
   directPreviewUrl = '';
+  baseThumbUrl = '';
   dur = 0;
   startS = 0;
   endS = 0;
@@ -1686,11 +1722,11 @@ function attachDrag(){
     }
 
     if(dragState.precisionMode || isAboveTrack){
-      if(!dragState.precisionMode){
-        dragState.precisionMode = true;
-        dragState.zoomAnchor = getHandleValue(isDrag);
-        dragState.zoomStartX = event.clientX;
-        dragState.lockedZoomSpan = getLockedZoomSpan();
+    if(!dragState.precisionMode){
+      dragState.precisionMode = true;
+      dragState.zoomAnchor = getHandleValue(isDrag);
+      dragState.zoomStartX = event.clientX;
+      dragState.lockedZoomSpan = getLockedZoomSpan();
       }
       const windowSpan = dragState.lockedZoomSpan || DRAG_ZOOM_MIN_WINDOW_SEC;
       const deltaRatio = (event.clientX - dragState.zoomStartX) / Math.max(rect.width, 1);
@@ -1709,6 +1745,10 @@ function attachDrag(){
       });
     }else{
       hideZoomPreview();
+    }
+    if(isDrag === 'l' && previewMode === 'worker'){
+      const video = document.getElementById('worker-preview');
+      if(video && video.readyState >= 2) setThumbFromVideoFrame(video);
     }
     schedulePreviewSync({focus: getHandleFocus(isDrag), immediate: true});
   }, {passive: false});
