@@ -496,6 +496,8 @@ let ytPlayer = null;
 let ytPlayerReady = false;
 let ytApiPromise = null;
 let ytSyncTimer = null;
+let ytFramePrimeActive = false;
+let ytFramePrimeTimer = null;
 let previewMode = 'none';
 let previewReloadTimer = null;
 let previewLoadTimer = null;
@@ -1012,6 +1014,9 @@ function getYouTubeCueOptions(){
 function destroyYouTubePlayer(){
   clearTimeout(ytSyncTimer);
   ytSyncTimer = null;
+  clearTimeout(ytFramePrimeTimer);
+  ytFramePrimeTimer = null;
+  ytFramePrimeActive = false;
   ytPlayerReady = false;
   if(ytPlayer && typeof ytPlayer.destroy === 'function'){
     try{ ytPlayer.destroy(); }catch(err){}
@@ -1304,6 +1309,36 @@ function schedulePreviewSync(options = {}){
   ytSyncTimer = setTimeout(() => syncYouTubeToSelection(options), 120);
 }
 
+function primeYouTubeFrame(){
+  if(!isYouTubeActive() || !videoId || !ytPlayerReady || !ytPlayer) return;
+  const start = getPreviewRange().start;
+  clearTimeout(ytFramePrimeTimer);
+  ytFramePrimeActive = true;
+  try{
+    if(typeof ytPlayer.mute === 'function') ytPlayer.mute();
+    ytPlayer.loadVideoById(getYouTubeCueOptions());
+  }catch(err){
+    ytFramePrimeActive = false;
+    try{
+      ytPlayer.cueVideoById(getYouTubeCueOptions());
+      ytPlayer.seekTo(start, true);
+    }catch(innerErr){}
+    return;
+  }
+  ytFramePrimeTimer = setTimeout(() => {
+    if(!ytFramePrimeActive || !ytPlayer) return;
+    ytFramePrimeActive = false;
+    try{
+      ytPlayer.pauseVideo();
+      ytPlayer.seekTo(start, true);
+    }catch(err){}
+    curS = start;
+    updatePH();
+    setPlayState(false);
+    clearPlayTick();
+  }, 900);
+}
+
 function syncYouTubeToSelection(options = {}){
   if(!isYouTubeActive() || !videoId || !ytPlayerReady || !ytPlayer) return;
 
@@ -1311,8 +1346,7 @@ function syncYouTubeToSelection(options = {}){
   if(shouldRestart){
     curS = startS;
     updatePH();
-    ytPlayer.pauseVideo();
-    ytPlayer.cueVideoById(getYouTubeCueOptions());
+    primeYouTubeFrame();
     return;
   }
 
@@ -1354,7 +1388,22 @@ function startPlayTick(){
 function handleYouTubeStateChange(event){
   if(!window.YT) return;
   const state = event.data;
+  if(ytFramePrimeActive && (state === window.YT.PlayerState.PLAYING || state === window.YT.PlayerState.BUFFERING || state === window.YT.PlayerState.CUED)){
+    clearTimeout(ytFramePrimeTimer);
+    ytFramePrimeTimer = null;
+    ytFramePrimeActive = false;
+    try{
+      ytPlayer.pauseVideo();
+      ytPlayer.seekTo(startS, true);
+    }catch(err){}
+    curS = startS;
+    updatePH();
+    setPlayState(false);
+    clearPlayTick();
+    return;
+  }
   if(state === window.YT.PlayerState.PLAYING){
+    if(typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
     setPlayState(true);
     startPlayTick();
     return;
@@ -1427,7 +1476,7 @@ async function loadYouTubePreview(){
         drawWave();
         updateTL();
         updatePH();
-        event.target.cueVideoById(getYouTubeCueOptions());
+        primeYouTubeFrame();
       },
       onStateChange: handleYouTubeStateChange,
       onError: handleYouTubeError,
