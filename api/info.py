@@ -6,12 +6,22 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from api.lib.http import query_params, send_json
+from api.lib.http import query_params, rate_limit_check, send_json
 from worker.app import fetch_info, select_preview_url
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        allowed, retry_after = rate_limit_check(self, "info", limit=30, window_sec=60)
+        if not allowed:
+            send_json(
+                self,
+                429,
+                {"error": "Too many metadata requests. Try again shortly."},
+                {"Cache-Control": "no-store", "Retry-After": str(retry_after)},
+            )
+            return
+
         url = query_params(self.path).get("url", "").strip()
         if not url:
             send_json(self, 400, {"error": "Missing url"}, {"Cache-Control": "no-store"})

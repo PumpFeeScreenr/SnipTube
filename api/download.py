@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from api.lib.http import parse_float, query_params, send_file, send_json
+from api.lib.http import parse_float, query_params, rate_limit_check, send_file, send_json
 from worker.app import (
     GIF_MAX_SEC,
     QUALITY_PROFILES,
@@ -27,6 +27,16 @@ from worker.app import (
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        allowed, retry_after = rate_limit_check(self, "download", limit=10, window_sec=60)
+        if not allowed:
+            send_json(
+                self,
+                429,
+                {"error": "Too many download requests. Try again in a minute."},
+                {"Cache-Control": "no-store", "Retry-After": str(retry_after)},
+            )
+            return
+
         params = query_params(self.path)
         url = params.get("url", "").strip()
         fmt = params.get("format", "mp4").strip().lower()

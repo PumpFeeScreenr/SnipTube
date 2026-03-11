@@ -698,6 +698,8 @@ function extractYTId(url){
 
 function looksTwitter(url){return /twitter\.com|x\.com/.test(url)}
 function isYouTubeActive(){return Boolean(currentUrl) && !looksTwitter(currentUrl)}
+function looksYouTube(url){return /(?:youtube\.com\/watch|youtube\.com\/shorts\/|youtu\.be\/)/.test(String(url || '').trim())}
+function isSupportedUrl(url){return looksYouTube(url) || looksTwitter(url)}
 function isBotCheckError(message){
   return /sign in to confirm you're not a bot|cookies-from-browser|use --cookies/i.test(String(message || ''));
 }
@@ -719,7 +721,18 @@ function setConnectionNote(message, type = ''){
 
 async function initWorker(){
   if(workerOverride){
-    workerBase = workerOverride.replace(/\/+$/, '');
+    let overrideUrl = '';
+    try{
+      const parsed = new URL(workerOverride);
+      if(parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1'){
+        throw new Error('Worker override must use HTTPS.');
+      }
+      overrideUrl = parsed.toString().replace(/\/+$/, '');
+    }catch(err){
+      setConnectionNote('Worker override is invalid. Use an HTTPS worker URL.', 'error');
+      return '';
+    }
+    workerBase = overrideUrl;
     setConnectionNote(`Worker override active: ${workerBase}`, 'ok');
     return workerBase;
   }
@@ -774,6 +787,33 @@ function shouldSkipPreview(url = currentUrl){
 }
 
 const configReady = initWorker();
+
+async function checkWorkerHealth(){
+  await configReady;
+  if(!workerBase) return false;
+
+  try{
+    const res = await fetch(apiUrl('/health'), {cache: 'no-store'});
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok || data.status !== 'ok'){
+      setConnectionNote('Worker health check failed. Downloads may be degraded.', 'error');
+      return false;
+    }
+    if(!data.ffmpeg){
+      setConnectionNote('Worker is missing ffmpeg. Downloads are unavailable.', 'error');
+      return false;
+    }
+    if(!workerOverride && isSameOriginWorker() && !data.cookies){
+      setConnectionNote('Worker is healthy. YouTube exports may still fail without cookies.', 'ok');
+      return true;
+    }
+    setConnectionNote('Worker connected. Ready to fetch clips.', 'ok');
+    return true;
+  }catch(err){
+    setConnectionNote('Worker health check failed. Downloads may be degraded.', 'error');
+    return false;
+  }
+}
 
 function clearPlayTick(){
   if(playTick){
@@ -1223,6 +1263,10 @@ async function loadVideo(){
   const url = $('yt-url').value.trim();
   if(!url){
     toast('Paste a URL first', 'error');
+    return;
+  }
+  if(!isSupportedUrl(url)){
+    toast('Paste a supported YouTube or Twitter/X URL.', 'error');
     return;
   }
 
@@ -1815,6 +1859,7 @@ restoreCachedUrl();
 attachDrag();
 updateTL();
 updatePH();
+checkWorkerHealth();
 window.addEventListener('resize', () => {
   if(dur){
     drawWave();
