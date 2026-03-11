@@ -765,9 +765,15 @@ function isBotCheckError(message){
 }
 function formatApiError(message, url = currentUrl){
   const text = String(message || '').trim();
-  if(!text) return 'Unknown error';
+  if(!text) return 'Something went wrong. Please try again.';
+  if(/longer than 10 minutes are not supported/i.test(text)){
+    return 'That video is longer than 10 minutes. Please choose a shorter video.';
+  }
   if(!looksTwitter(url) && isBotCheckError(text)){
     return 'YouTube is blocking automated export right now. Preview still works, but download needs a trusted worker or fresh browser cookies.';
+  }
+  if(/^ERROR:\s*\[youtube\]/i.test(text)){
+    return 'This YouTube link could not be loaded right now. Please try another video or try again later.';
   }
   return text;
 }
@@ -1494,7 +1500,7 @@ async function loadVideo(){
     } else {
       setAllButtons(false);
     }
-    toast('Error: ' + formatApiError(err.message, url), 'error');
+    toast(formatApiError(err.message, url), 'error');
   }finally{
     setLoadButton(false);
   }
@@ -2055,7 +2061,7 @@ async function doDownload(isSnip){
       return;
     }
     resetDownloadUi();
-    toast('Download failed: ' + formatApiError(err.message), 'error');
+    toast(formatApiError(err.message), 'error');
   }finally{
     if(activeDownloadController === controller) activeDownloadController = null;
     setAllButtons(false);
