@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from flask import Flask, after_this_request, jsonify, request, send_file
@@ -76,6 +77,10 @@ MEDIA_SUFFIX_PRIORITY = (
 COOKIE_FILE = TMPDIR / "cookies.txt"
 PREVIEW_CACHE_DIR = TMPDIR / "preview_cache"
 PREVIEW_CACHE_DIR.mkdir(exist_ok=True)
+PREVIEW_CACHE_CLEANUP_INTERVAL_SEC = 300
+PREVIEW_LOCKS: dict[str, threading.Lock] = {}
+PREVIEW_LOCKS_GUARD = threading.Lock()
+LAST_PREVIEW_CACHE_CLEANUP = 0.0
 QUALITY_PROFILES = {
     "small": {
         "gif": {
@@ -192,6 +197,35 @@ def cleanup_prefix(prefix: str, delay: int = 120) -> None:
     threading.Thread(target=_remove, daemon=True).start()
 
 
+def cleanup_stale_previews(force: bool = False) -> None:
+    global LAST_PREVIEW_CACHE_CLEANUP
+
+    now = time.time()
+    if not force and (now - LAST_PREVIEW_CACHE_CLEANUP) < PREVIEW_CACHE_CLEANUP_INTERVAL_SEC:
+        return
+    LAST_PREVIEW_CACHE_CLEANUP = now
+
+    cutoff = now - PREVIEW_CACHE_TTL_SEC
+    for path in PREVIEW_CACHE_DIR.glob("*.mp4"):
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+@contextmanager
+def preview_generation_lock(cache_file: Path):
+    key = cache_file.name
+    with PREVIEW_LOCKS_GUARD:
+        lock = PREVIEW_LOCKS.setdefault(key, threading.Lock())
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def find_downloaded_media(stem: str) -> Path | None:
     candidates = []
     for path in TMPDIR.glob(f"{stem}*"):
@@ -280,6 +314,36 @@ def ytdlp_opts(extra: dict | None = None) -> dict:
 def fetch_info(url: str) -> dict:
     with yt_dlp.YoutubeDL(ytdlp_opts({"skip_download": True})) as ydl:
         return ydl.extract_info(url, download=False)
+
+
+def select_preview_url(info: dict) -> str | None:
+    if (info.get("extractor_key") or "").lower() != "twitter":
+        return None
+
+    direct_mp4 = []
+    hls_fallback = []
+    for fmt in info.get("formats") or []:
+        media_url = fmt.get("url")
+        if not media_url:
+            continue
+
+        protocol = (fmt.get("protocol") or "").lower()
+        ext = (fmt.get("ext") or "").lower()
+        height = int(fmt.get("height") or 0)
+        width = int(fmt.get("width") or 0)
+        score = (height * width, height, width)
+
+        if protocol in {"https", "http"} and ext == "mp4":
+            direct_mp4.append((score, media_url))
+            continue
+        if protocol == "m3u8_native":
+            hls_fallback.append((score, media_url))
+
+    if direct_mp4:
+        return max(direct_mp4, key=lambda item: item[0])[1]
+    if hls_fallback:
+        return max(hls_fallback, key=lambda item: item[0])[1]
+    return None
 
 
 def get_quality_profile(fmt: str, quality: str) -> dict:
@@ -521,6 +585,7 @@ def api_info():
             "duration": int(info.get("duration") or 0),
             "thumb": info.get("thumbnail"),
             "platform": info.get("extractor_key", ""),
+            "previewUrl": select_preview_url(info),
         }
     )
 
@@ -607,37 +672,42 @@ def api_preview():
     if not url:
         return jsonify({"error": "Missing url"}), 400
 
+    cleanup_stale_previews()
     cache_file = preview_cache_path(url)
     if has_fresh_preview(cache_file):
         return send_file(str(cache_file), mimetype="video/mp4", as_attachment=False, conditional=True)
 
-    temp_out = PREVIEW_CACHE_DIR / f"{cache_file.stem}.{uuid.uuid4().hex[:8]}.tmp.mp4"
+    with preview_generation_lock(cache_file):
+        if has_fresh_preview(cache_file):
+            return send_file(str(cache_file), mimetype="video/mp4", as_attachment=False, conditional=True)
 
-    uid = uuid.uuid4().hex[:10]
-    raw_stem = f"{PREVIEW_PROFILE}_raw_{uid}"
-    raw_tmpl = str(TMPDIR / f"{raw_stem}.%(ext)s")
+        temp_out = PREVIEW_CACHE_DIR / f"{cache_file.stem}.{uuid.uuid4().hex[:8]}.tmp.mp4"
 
-    try:
-        download_media(url, raw_tmpl, PREVIEW_PROFILE, "balanced")
-    except Exception as exc:
-        cleanup_prefix(raw_stem, 5)
-        return jsonify({"error": f"Preview download failed: {exc}"}), 500
+        uid = uuid.uuid4().hex[:10]
+        raw_stem = f"{PREVIEW_PROFILE}_raw_{uid}"
+        raw_tmpl = str(TMPDIR / f"{raw_stem}.%(ext)s")
 
-    raw_file = find_downloaded_media(raw_stem)
-    if not raw_file or not raw_file.exists():
-        cleanup_prefix(raw_stem, 5)
-        return jsonify({"error": "Preview source media was not found on disk"}), 500
+        try:
+            download_media(url, raw_tmpl, PREVIEW_PROFILE, "balanced")
+        except Exception as exc:
+            cleanup_prefix(raw_stem, 5)
+            return jsonify({"error": f"Preview download failed: {exc}"}), 500
 
-    ok, details = make_full_preview(raw_file, temp_out)
-    cleanup_prefix(raw_stem, 30)
+        raw_file = find_downloaded_media(raw_stem)
+        if not raw_file or not raw_file.exists():
+            cleanup_prefix(raw_stem, 5)
+            return jsonify({"error": "Preview source media was not found on disk"}), 500
 
-    if not ok:
-        cleanup_file(temp_out, 5)
-        return jsonify({"error": "preview ffmpeg failed", "details": details}), 500
+        ok, details = make_full_preview(raw_file, temp_out)
+        cleanup_prefix(raw_stem, 30)
 
-    if not temp_out.exists():
-        return jsonify({"error": "Preview output is missing after processing"}), 500
-    temp_out.replace(cache_file)
+        if not ok:
+            cleanup_file(temp_out, 5)
+            return jsonify({"error": "preview ffmpeg failed", "details": details}), 500
+
+        if not temp_out.exists():
+            return jsonify({"error": "Preview output is missing after processing"}), 500
+        temp_out.replace(cache_file)
     return send_file(str(cache_file), mimetype="video/mp4", as_attachment=False, conditional=True)
 
 

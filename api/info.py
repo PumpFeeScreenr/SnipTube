@@ -7,7 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from api.lib.http import query_params, send_json
-from worker.app import fetch_info
+from worker.app import fetch_info, select_preview_url
 
 
 class handler(BaseHTTPRequestHandler):
@@ -33,6 +33,7 @@ class handler(BaseHTTPRequestHandler):
                 "duration": int(info.get("duration") or 0),
                 "thumb": info.get("thumbnail"),
                 "platform": info.get("extractor_key", ""),
+                "previewUrl": select_preview_url(info),
             },
             {"Cache-Control": "no-store"},
         )

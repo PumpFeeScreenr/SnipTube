@@ -244,6 +244,7 @@ h1 em{font-style:normal;color:var(--accent)}
     <input class="url-input" id="yt-url" type="text" placeholder="https://youtube.com/watch?v=..."/>
     <button class="url-btn" id="load-btn" onclick="loadVideo()">Load →</button>
   </div>
+  <div class="hero-note" id="conn-note"></div>
 </section>
 
 <div id="loading">
@@ -496,6 +497,7 @@ let previewReloadTimer = null;
 let previewLoadTimer = null;
 let previewLoadToken = 0;
 let workerPreviewPendingSeek = null;
+let directPreviewUrl = '';
 let dragState = null;
 let zoomPreviewPendingSeek = null;
 let zoomPreviewSrc = '';
@@ -696,6 +698,17 @@ function extractYTId(url){
 
 function looksTwitter(url){return /twitter\.com|x\.com/.test(url)}
 function isYouTubeActive(){return Boolean(currentUrl) && !looksTwitter(currentUrl)}
+function isBotCheckError(message){
+  return /sign in to confirm you're not a bot|cookies-from-browser|use --cookies/i.test(String(message || ''));
+}
+function formatApiError(message, url = currentUrl){
+  const text = String(message || '').trim();
+  if(!text) return 'Unknown error';
+  if(!looksTwitter(url) && isBotCheckError(text)){
+    return 'YouTube is blocking automated export right now. Preview still works, but download needs a trusted worker or fresh browser cookies.';
+  }
+  return text;
+}
 
 function setConnectionNote(message, type = ''){
   const note = $('conn-note');
@@ -757,7 +770,7 @@ function isSameOriginWorker(){
 
 function shouldSkipPreview(url = currentUrl){
   if(!looksTwitter(url)) return false;
-  return isSameOriginWorker() && !workerOverride;
+  return isSameOriginWorker() && !workerOverride && !directPreviewUrl;
 }
 
 const configReady = initWorker();
@@ -787,6 +800,7 @@ function getPreviewSeekTarget(focus = 'start'){
 }
 
 function getPreviewAssetUrl(){
+  if(directPreviewUrl) return directPreviewUrl;
   return `${apiUrl('/api/preview')}?url=${encodeURIComponent(currentUrl)}`;
 }
 
@@ -827,12 +841,12 @@ function destroyYouTubePlayer(){
 }
 
 function destroyWorkerPreview(options = {}){
-  const {resetPendingSeek = true} = options;
+  const {resetPendingSeek = true, invalidateToken = true} = options;
   clearTimeout(previewReloadTimer);
   previewReloadTimer = null;
   clearTimeout(previewLoadTimer);
   previewLoadTimer = null;
-  previewLoadToken += 1;
+  if(invalidateToken) previewLoadToken += 1;
   if(resetPendingSeek) workerPreviewPendingSeek = null;
   const video = document.getElementById('worker-preview');
   if(!video) return;
@@ -844,6 +858,7 @@ function destroyWorkerPreview(options = {}){
 function ensureZoomPreviewLoaded(){
   const video = $('zoom-preview-video');
   if(!video || !currentUrl || !workerBase) return null;
+  if(isYouTubeActive()) return null;
 
   if(!video._bound){
     video._bound = true;
@@ -948,10 +963,10 @@ async function loadWorkerPreview(options = {}){
   const {autoplay = false, focus = autoplay ? 'current' : 'start'} = options;
   const preview = $('vid-preview');
   const isTwitter = looksTwitter(currentUrl);
-  const loadToken = ++previewLoadToken;
 
   destroyYouTubePlayer();
-  destroyWorkerPreview({resetPendingSeek: false});
+  destroyWorkerPreview({resetPendingSeek: false, invalidateToken: false});
+  const loadToken = ++previewLoadToken;
 
   previewMode = 'worker';
   workerPreviewPendingSeek = getPreviewSeekTarget(focus);
@@ -1143,15 +1158,43 @@ function handleYouTubeStateChange(event){
 
 function handleYouTubeError(){
   const code = arguments[0] && typeof arguments[0].data === 'number' ? arguments[0].data : null;
-  loadWorkerPreview({
-    autoplay: false,
-    focus: 'current',
-    errorCode: code
-  });
+  const message = code === 101 || code === 150
+    ? 'This YouTube video does not allow embedded playback.'
+    : 'YouTube preview could not be loaded.';
+  toast(message, 'error');
+  showPreviewFallback(message, 'error');
 }
 
 async function loadYouTubePreview(){
-  await loadWorkerPreview({focus: 'start'});
+  if(!videoId) throw new Error('Could not resolve the YouTube video ID.');
+
+  const preview = $('vid-preview');
+  const twitterNotice = $('tw-notice');
+  destroyWorkerPreview({resetPendingSeek: false, invalidateToken: false});
+  destroyYouTubePlayer();
+
+  previewMode = 'youtube';
+  preview.style.display = 'block';
+  twitterNotice.style.display = 'none';
+  preview.innerHTML = '<div id="yt-player-slot"></div>';
+
+  await ensureYouTubeApi();
+  ytPlayer = new window.YT.Player('yt-player-slot', {
+    width: '100%',
+    height: '100%',
+    videoId,
+    playerVars: getYouTubePlayerVars(),
+    events: {
+      onReady: event => {
+        ytPlayerReady = true;
+        curS = startS;
+        updatePH();
+        event.target.cueVideoById(getYouTubeCueOptions());
+      },
+      onStateChange: handleYouTubeStateChange,
+      onError: handleYouTubeError,
+    },
+  });
 }
 
 function setPlat(nextPlat){
@@ -1201,7 +1244,7 @@ async function loadVideo(){
   try{
     const res = await fetch(`${apiUrl('/api/info')}?url=${encodeURIComponent(url)}`);
     const data = await res.json();
-    if(!res.ok || data.error) throw new Error(data.error || 'Failed to fetch video info');
+    if(!res.ok || data.error) throw new Error(formatApiError(data.error || 'Failed to fetch video info', url));
     $('loading').style.display = 'none';
     await renderEditor(data, url);
   }catch(err){
@@ -1213,7 +1256,7 @@ async function loadVideo(){
     } else {
       setAllButtons(false);
     }
-    toast('Error: ' + err.message, 'error');
+    toast('Error: ' + formatApiError(err.message, url), 'error');
   }finally{
     setLoadButton(false);
   }
@@ -1240,6 +1283,7 @@ async function renderEditor(info, sourceUrl){
   startS = 0;
   endS = dur;
   curS = 0;
+  directPreviewUrl = looksTwitter(sourceUrl) ? String(info.previewUrl || '').trim() : '';
   previewMode = 'none';
   setPlayState(false);
   clearPlayTick();
@@ -1260,10 +1304,16 @@ async function renderEditor(info, sourceUrl){
   preview.style.display = 'block';
   twitterNotice.style.display = 'none';
   $('tw-orig-link').href = currentUrl;
-  if(shouldSkipPreview(sourceUrl)){
+  if(isYT){
+    setConnectionNote('Preview running through the YouTube player. Export can still be blocked by YouTube.', 'ok');
+    await loadYouTubePreview();
+  } else if(shouldSkipPreview(sourceUrl)){
     showPreviewFallback('', '');
     setConnectionNote('Hosted mode: X preview is disabled to keep exports responsive.', 'ok');
   } else {
+    if(directPreviewUrl){
+      setConnectionNote('Direct X preview loaded from the source video.', 'ok');
+    }
     await loadWorkerPreview({focus: 'start'});
   }
 
@@ -1413,6 +1463,7 @@ function goHome(nextPlat = plat){
   previewMode = 'none';
   currentUrl = '';
   videoId = '';
+  directPreviewUrl = '';
   dur = 0;
   startS = 0;
   endS = 0;
@@ -1631,8 +1682,9 @@ function togglePlay(){
     return;
   }
 
-  setPlayState(!isPlay);
-  if(!isPlay){
+  const nextState = !isPlay;
+  setPlayState(nextState);
+  if(!nextState){
     clearPlayTick();
     return;
   }
@@ -1719,7 +1771,7 @@ async function doDownload(isSnip){
     const res = await fetch(endpoint, {signal: controller.signal});
     if(!res.ok){
       const err = await res.json().catch(() => ({error: `HTTP ${res.status}`}));
-      throw new Error(err.error || err.details || `HTTP ${res.status}`);
+      throw new Error(formatApiError(err.error || err.details || `HTTP ${res.status}`));
     }
 
     fill.style.width = '95%';
@@ -1752,7 +1804,7 @@ async function doDownload(isSnip){
       return;
     }
     resetDownloadUi();
-    toast('Download failed: ' + err.message, 'error');
+    toast('Download failed: ' + formatApiError(err.message), 'error');
   }finally{
     if(activeDownloadController === controller) activeDownloadController = null;
     setAllButtons(false);
