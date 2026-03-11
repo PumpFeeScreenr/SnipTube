@@ -1403,6 +1403,11 @@ async function loadYouTubePreview(){
       onReady: event => {
         ytPlayerReady = true;
         const nextDuration = Number(event.target.getDuration ? event.target.getDuration() : 0) || 0;
+        if(nextDuration > YOUTUBE_WINDOW_MAX_SEC){
+          toast('That video is longer than 10 minutes. Please choose a shorter video.', 'error');
+          goHome('yt');
+          return;
+        }
         if(nextDuration > 0){
           const wasAtFullEnd = dur <= 0 || Math.abs(endS - dur) < 0.25;
           dur = nextDuration;
