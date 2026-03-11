@@ -107,7 +107,9 @@ h1 em{font-style:normal;color:var(--accent)}
 .quality-btn:hover:not(.active){border-color:#3a3a3a;background:var(--surface2)}
 .quality-btn .quality-label{display:block;font-size:.72rem}
 .quality-btn .quality-desc{display:block;font-size:.58rem;color:var(--muted);font-weight:400;margin-top:2px;line-height:1.35}
+.quality-btn .quality-size{display:block;font-size:.58rem;color:rgba(255,255,255,.72);font-weight:500;margin-top:4px;line-height:1.35}
 .quality-btn.active .quality-desc{color:rgba(232,255,71,.62)}
+.quality-btn.active .quality-size{color:rgba(232,255,71,.86)}
 
 /* GIF WARNING */
 .gif-note{display:none;background:rgba(232,255,71,.06);border:1px solid rgba(232,255,71,.2);border-radius:8px;padding:10px 12px;font-family:'DM Mono',monospace;font-size:.72rem;color:rgba(232,255,71,.8);line-height:1.5}
@@ -308,14 +310,17 @@ h1 em{font-style:normal;color:var(--accent)}
           <button class="quality-btn" id="quality-small" onclick="setQuality('small')">
             <span class="quality-label">Small</span>
             <span class="quality-desc">Lean files</span>
+            <span class="quality-size" id="quality-small-size">~0 KB</span>
           </button>
           <button class="quality-btn active" id="quality-balanced" onclick="setQuality('balanced')">
             <span class="quality-label">Balanced</span>
             <span class="quality-desc">Best default</span>
+            <span class="quality-size" id="quality-balanced-size">~0 KB</span>
           </button>
           <button class="quality-btn" id="quality-high" onclick="setQuality('high')">
             <span class="quality-label">High</span>
             <span class="quality-desc">Sharper output</span>
+            <span class="quality-size" id="quality-high-size">~0 KB</span>
           </button>
         </div>
         <div class="gif-note" id="gif-note">
@@ -659,6 +664,12 @@ function updateDownloadUi(){
   $('dl-estimate').innerHTML = fmt === 'gif'
     ? `${qualityLabel} quality<br/>Snippet export<br/>${sizeLabel}`
     : `${qualityLabel} quality<br/>${hasClipWindowLimit() ? 'Window export' : 'Snippet + full export'}<br/>${sizeLabel}`;
+  ['small', 'balanced', 'high'].forEach(name => {
+    const sizeEl = $('quality-' + name + '-size');
+    if(!sizeEl) return;
+    const projectedBytes = estimateDownloadBytes(endS - startS, fmt, name);
+    sizeEl.textContent = `~${fmtBytes(projectedBytes)}`;
+  });
 }
 function waveSeed(){
   return [...(videoId || currentUrl || '42')].reduce((sum, char) => sum + char.charCodeAt(0), 0) || 42;

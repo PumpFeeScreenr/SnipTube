@@ -22,6 +22,7 @@ from worker.app import (
     find_downloaded_media,
     is_youtube_info,
     make_gif,
+    normalize_media_info,
     parse_clip_range,
     resolve_youtube_window,
     safe_name,
@@ -63,7 +64,8 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            info = fetch_info(url)
+            raw_info = fetch_info(url)
+            info, playlist_index = normalize_media_info(raw_info)
             window = resolve_youtube_window(url, info)
         except ValueError as exc:
             send_json(self, 400, {"error": str(exc)}, {"Cache-Control": "no-store"})
@@ -101,6 +103,7 @@ class handler(BaseHTTPRequestHandler):
                 fmt,
                 quality,
                 info=info,
+                playlist_index=playlist_index,
                 range_start=window["window_start"] if window["windowed"] else None,
                 range_end=window["window_end"] if window["windowed"] else None,
             )

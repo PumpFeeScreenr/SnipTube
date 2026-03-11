@@ -318,6 +318,27 @@ def fetch_info(url: str) -> dict:
         return ydl.extract_info(url, download=False)
 
 
+def normalize_media_info(info: dict) -> tuple[dict, int | None]:
+    entries = [entry for entry in (info.get("entries") or []) if isinstance(entry, dict)]
+    if (info.get("_type") or "").lower() != "playlist" or not entries:
+        return info, None
+
+    selected = None
+    for entry in entries:
+        if entry.get("formats") or entry.get("url") or entry.get("duration"):
+            selected = entry
+            break
+    if selected is None:
+        selected = entries[0]
+
+    playlist_index = selected.get("playlist_index")
+    merged = dict(info)
+    merged.update({key: value for key, value in selected.items() if value not in (None, [], {})})
+    merged["entries"] = entries
+    merged["_playlist_entry_index"] = playlist_index
+    return merged, playlist_index if isinstance(playlist_index, int) else None
+
+
 def parse_time_marker(value: str | None) -> float | None:
     raw = str(value or "").strip().lower()
     if not raw:
@@ -467,6 +488,7 @@ def download_media(
     quality: str,
     *,
     info: dict | None = None,
+    playlist_index: int | None = None,
     range_start: float | None = None,
     range_end: float | None = None,
 ) -> None:
@@ -495,6 +517,8 @@ def download_media(
     ):
         download_opts["download_ranges"] = yt_dlp.utils.download_range_func(None, [(range_start, range_end)])
         download_opts["force_keyframes_at_cuts"] = True
+    if info and (info.get("extractor_key") or "").lower() == "twitter" and playlist_index:
+        download_opts["playlist_items"] = str(playlist_index)
 
     with yt_dlp.YoutubeDL(ytdlp_opts(download_opts)) as ydl:
         ydl.download([url])
@@ -691,7 +715,8 @@ def api_info():
         return jsonify({"error": "Missing url"}), 400
 
     try:
-        info = fetch_info(url)
+        raw_info = fetch_info(url)
+        info, playlist_index = normalize_media_info(raw_info)
         window = resolve_youtube_window(url, info)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -710,6 +735,7 @@ def api_info():
             "thumb": info.get("thumbnail"),
             "platform": info.get("extractor_key", ""),
             "previewUrl": select_preview_url(info),
+            "playlistIndex": playlist_index,
             "initialSeek": window["initial_seek"],
             "clipWindowStart": window["window_start"],
             "clipWindowEnd": window["window_end"],
@@ -734,7 +760,8 @@ def api_download():
         return jsonify({"error": "quality must be small | balanced | high"}), 400
 
     try:
-        info = fetch_info(url)
+        raw_info = fetch_info(url)
+        info, playlist_index = normalize_media_info(raw_info)
         window = resolve_youtube_window(url, info)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -769,6 +796,7 @@ def api_download():
             fmt,
             quality,
             info=info,
+            playlist_index=playlist_index,
             range_start=window["window_start"] if window["windowed"] else None,
             range_end=window["window_end"] if window["windowed"] else None,
         )
