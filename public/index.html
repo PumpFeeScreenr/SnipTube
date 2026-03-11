@@ -139,6 +139,8 @@ h1 em{font-style:normal;color:var(--accent)}
 .tl-zoom-layout{display:grid;grid-template-columns:minmax(150px,188px) minmax(0,1fr);gap:12px;align-items:stretch}
 .tl-zoom-media{position:relative;border-radius:10px;overflow:hidden;border:1px solid rgba(232,255,71,.18);background:#000;min-height:82px}
 #zoom-preview-video{width:100%;height:100%;display:block;object-fit:cover;background:#000}
+#zoom-yt-slot{width:100%;height:100%;display:none}
+#zoom-yt-slot iframe{width:100%;height:100%;border:0;display:block}
 .tl-zoom-track{position:relative;height:82px;border-radius:10px;overflow:hidden;border:1px solid rgba(232,255,71,.18);background:linear-gradient(180deg,rgba(232,255,71,.05),rgba(17,17,17,.92))}
 #zoom-waveform-canvas{position:absolute;inset:0;width:100%;height:100%}
 .tl-zoom-selection{position:absolute;top:0;bottom:0;background:rgba(232,255,71,.12);border-top:2px solid rgba(232,255,71,.82);border-bottom:2px solid rgba(232,255,71,.82);pointer-events:none}
@@ -340,6 +342,7 @@ h1 em{font-style:normal;color:var(--accent)}
         <div class="tl-zoom-layout">
           <div class="tl-zoom-media">
             <video id="zoom-preview-video" muted playsinline preload="metadata"></video>
+            <div id="zoom-yt-slot"></div>
           </div>
           <div>
             <div class="tl-zoom-track" id="tl-zoom-track">
@@ -488,6 +491,9 @@ let currentUrl = '';
 let videoId = '';
 let ytPlayer = null;
 let ytPlayerReady = false;
+let ytZoomPlayer = null;
+let ytZoomReady = false;
+let ytZoomPendingSeek = null;
 let ytApiPromise = null;
 let ytSyncTimer = null;
 let previewMode = 'none';
@@ -802,6 +808,8 @@ function destroyYouTubePlayer(){
   clearTimeout(ytSyncTimer);
   ytSyncTimer = null;
   ytPlayerReady = false;
+  ytZoomReady = false;
+  ytZoomPendingSeek = null;
   if(ytPlayer && typeof ytPlayer.destroy === 'function'){
     try{ ytPlayer.destroy(); }catch(err){}
   }
@@ -861,6 +869,65 @@ function syncZoomPreview(seconds){
   }
 }
 
+function ensureZoomYouTubePlayer(){
+  const slot = $('zoom-yt-slot');
+  if(!slot || !currentUrl || !videoId) return null;
+  if(ytZoomPlayer) return ytZoomPlayer;
+
+  ytZoomReady = false;
+  ytZoomPendingSeek = null;
+  ensureYouTubeApi().then(YT => {
+    ytZoomPlayer = new YT.Player('zoom-yt-slot', {
+      videoId,
+      playerVars: {
+        autoplay: 0,
+        controls: 0,
+        disablekb: 1,
+        modestbranding: 1,
+        playsinline: 1,
+        rel: 0
+      },
+      events: {
+        onReady: () => {
+          ytZoomReady = true;
+          if(ytZoomPlayer && typeof ytZoomPlayer.mute === 'function') ytZoomPlayer.mute();
+          if(typeof ytZoomPendingSeek === 'number'){
+            const target = clamp(ytZoomPendingSeek, 0, dur);
+            ytZoomPlayer.seekTo(target, true);
+            ytZoomPendingSeek = null;
+          }
+        }
+      }
+    });
+  }).catch(() => {});
+
+  return ytZoomPlayer;
+}
+
+function syncYouTubeZoomPreview(seconds){
+  if(previewMode !== 'yt') return;
+  ensureZoomYouTubePlayer();
+  const target = clamp(seconds, 0, dur || seconds);
+  if(!ytZoomPlayer || !ytZoomReady){
+    ytZoomPendingSeek = target;
+    return;
+  }
+  try{ ytZoomPlayer.pauseVideo(); }catch(err){}
+  ytZoomPlayer.seekTo(target, true);
+}
+
+function showZoomMediaForMode(){
+  const video = $('zoom-preview-video');
+  const slot = $('zoom-yt-slot');
+  if(previewMode === 'yt'){
+    if(video) video.style.display = 'none';
+    if(slot) slot.style.display = 'block';
+  }else{
+    if(video) video.style.display = 'block';
+    if(slot) slot.style.display = 'none';
+  }
+}
+
 function resetZoomPreview(){
   const video = $('zoom-preview-video');
   zoomPreviewPendingSeek = null;
@@ -912,6 +979,8 @@ async function loadWorkerPreview(options = {}){
 
   previewMode = 'worker';
   workerPreviewPendingSeek = getPreviewSeekTarget(focus);
+  showZoomMediaForMode();
+  ytZoomPendingSeek = null;
 
   preview.style.display = 'block';
   preview.innerHTML = '<video id=\"worker-preview\" controls playsinline preload=\"metadata\"></video>';
@@ -1103,6 +1172,8 @@ async function loadYouTubePreview(){
 
   previewMode = 'yt';
   ytPlayerReady = false;
+  showZoomMediaForMode();
+  ytZoomPendingSeek = null;
 
   const preview = $('vid-preview');
   preview.style.display = 'block';
@@ -1117,6 +1188,9 @@ async function loadYouTubePreview(){
         ytPlayerReady = true;
         ytPlayer.cueVideoById(getYouTubeCueOptions());
         syncYouTubePreview('start');
+        if(ytZoomPlayer && typeof ytZoomPlayer.cueVideoById === 'function'){
+          ytZoomPlayer.cueVideoById(getYouTubeCueOptions());
+        }
       },
       onStateChange: handleYouTubeStateChange,
       onError: handleYouTubeError
@@ -1333,6 +1407,7 @@ function hideZoomPreview(){
   const zoom = $('tl-zoom');
   zoom.classList.remove('active');
   zoom.setAttribute('aria-hidden', 'true');
+  showZoomMediaForMode();
   resetZoomPreview();
 }
 
@@ -1363,7 +1438,9 @@ function showZoomPreview(options){
   $('zoom-min').textContent = fmtT(windowStart, {fractionDigits: TIME_PRECISION});
   $('zoom-max').textContent = fmtT(windowEnd, {fractionDigits: TIME_PRECISION});
   $('zoom-meta').textContent = `${(Math.max(1, (dur || span) / span)).toFixed(1)}x precision · ${fmtSpan(span)} window`;
+  showZoomMediaForMode();
   if(previewMode === 'worker') syncZoomPreview(activeTime);
+  if(previewMode === 'yt') syncYouTubeZoomPreview(activeTime);
   $('zoom-sel').style.left = Math.min(startPct, endPct) + '%';
   $('zoom-sel').style.width = Math.max(0, endPct - startPct) + '%';
   $('zoom-start-marker').style.left = startPct + '%';
