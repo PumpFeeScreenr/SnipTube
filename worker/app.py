@@ -48,6 +48,8 @@ TMPDIR.mkdir(exist_ok=True)
 
 GIF_MAX_SEC = 30
 PREVIEW_CACHE_TTL_SEC = 1800
+PREVIEW_PROFILE = "preview"
+
 IGNORED_DOWNLOAD_SUFFIXES = (
     ".description",
     ".info.json",
@@ -293,9 +295,9 @@ def get_quality_profile(fmt: str, quality: str) -> dict:
 
 
 def download_media(url: str, raw_tmpl: str, profile: str, quality: str) -> None:
-    if profile == "preview":
+    if profile == PREVIEW_PROFILE:
         download_opts = {
-            "format": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[ext=mp4]/best",
+            "format": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360][ext=mp4]/best[height<=360]/best[ext=mp4]/best",
             "outtmpl": raw_tmpl,
             "merge_output_format": "mp4",
         }
@@ -461,13 +463,13 @@ def make_full_preview(raw: Path, out: Path) -> tuple[bool, str]:
         "-i",
         str(raw),
         "-vf",
-        "scale='min(854,iw)':-2:flags=lanczos",
+        "fps=12,scale='min(640,iw)':-2:flags=fast_bilinear",
         "-c:v",
         "libx264",
         "-preset",
-        "veryfast",
+        "ultrafast",
         "-crf",
-        "30",
+        "34",
         "-pix_fmt",
         "yuv420p",
         "-movflags",
@@ -475,7 +477,7 @@ def make_full_preview(raw: Path, out: Path) -> tuple[bool, str]:
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        "96k",
         str(out),
     ]
     return run_ffmpeg(cmd)
@@ -612,11 +614,11 @@ def api_preview():
     temp_out = PREVIEW_CACHE_DIR / f"{cache_file.stem}.{uuid.uuid4().hex[:8]}.tmp.mp4"
 
     uid = uuid.uuid4().hex[:10]
-    raw_stem = f"preview_raw_{uid}"
+    raw_stem = f"{PREVIEW_PROFILE}_raw_{uid}"
     raw_tmpl = str(TMPDIR / f"{raw_stem}.%(ext)s")
 
     try:
-        download_media(url, raw_tmpl, "preview", "balanced")
+        download_media(url, raw_tmpl, PREVIEW_PROFILE, "balanced")
     except Exception as exc:
         cleanup_prefix(raw_stem, 5)
         return jsonify({"error": f"Preview download failed: {exc}"}), 500

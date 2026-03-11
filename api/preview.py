@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 from api.lib.http import query_params, send_file, send_json
 from worker.app import (
     PREVIEW_CACHE_DIR,
+    PREVIEW_PROFILE,
     cleanup_file,
     cleanup_prefix,
     download_media,
@@ -34,11 +35,11 @@ class handler(BaseHTTPRequestHandler):
 
         temp_out = PREVIEW_CACHE_DIR / f"{cache_file.stem}.{uuid.uuid4().hex[:8]}.tmp.mp4"
         uid = uuid.uuid4().hex[:10]
-        raw_stem = f"preview_raw_{uid}"
+        raw_stem = f"{PREVIEW_PROFILE}_raw_{uid}"
         raw_tmpl = str((PREVIEW_CACHE_DIR.parent / f"{raw_stem}.%(ext)s"))
 
         try:
-            download_media(url, raw_tmpl, "preview", "balanced")
+            download_media(url, raw_tmpl, PREVIEW_PROFILE, "balanced")
         except Exception as exc:
             cleanup_prefix(raw_stem, 5)
             send_json(self, 500, {"error": f"Preview download failed: {exc}"}, {"Cache-Control": "no-store"})

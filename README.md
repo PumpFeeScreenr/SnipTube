@@ -36,11 +36,69 @@ Optional Vercel environment variables:
 The cookies options matter because Twitter/X extraction may require authenticated
 cookies depending on the video and the platform's current restrictions.
 
-### 2. Optional external worker
+In Vercel-only mode, Twitter/X preview is intentionally degraded to a fallback
+state instead of forcing serverless preview generation. Metadata lookup and clip
+download still work, but this avoids long preview stalls on hosted same-origin
+requests.
 
-You can still deploy `worker/app.py` separately on Railway, Render, Fly.io, or
-any VPS that can run Docker. The `worker/Dockerfile` already installs ffmpeg and
-starts Gunicorn.
+### 2. External worker on Fly.io or Railway
+
+The recommended production setup is:
+
+- Vercel for the frontend
+- a long-running worker for `/api/info`, `/api/preview`, and `/api/download`
+
+The frontend already supports this through `WORKER_URL`.
+
+#### Fly.io
+
+The worker directory now includes [`worker/fly.toml`](./worker/fly.toml).
+
+1. Install the Fly CLI and authenticate.
+2. Edit `worker/fly.toml` and change `app = "sniptube-worker"` to a unique app name.
+3. Deploy from the worker directory:
+
+```bash
+cd worker
+fly launch --no-deploy
+fly deploy
+```
+
+4. Optional but recommended for Twitter/X:
+
+```bash
+fly secrets set YTDLP_COOKIES_B64="$(base64 < cookies.txt | tr -d '\n')"
+```
+
+5. Confirm the worker is healthy:
+
+```bash
+curl https://your-fly-app.fly.dev/health
+```
+
+#### Railway
+
+The worker directory now includes [`worker/railway.json`](./worker/railway.json).
+
+1. Create a new Railway project from the `worker` directory.
+2. Railway will build the worker from `worker/Dockerfile`.
+3. Set `YTDLP_COOKIES_B64` if Twitter/X extraction needs authenticated cookies.
+4. Confirm the worker is healthy:
+
+```bash
+curl https://your-railway-domain/health
+```
+
+#### Point the frontend at the worker
+
+After the worker is deployed, set this in the Vercel project for the frontend:
+
+```text
+WORKER_URL=https://your-worker-host.example.com
+```
+
+Then redeploy the Vercel app. The frontend will read `WORKER_URL` through
+`/api/config` and route requests to the external worker automatically.
 
 ### 3. Quick override for testing
 
@@ -126,3 +184,5 @@ Returns worker health information:
   are the fallback when public extraction is blocked.
 - There is no queueing or rate limiting yet, so this should not be treated as
   internet-scale infrastructure.
+- For production reliability, keep at least one worker instance warm. Preview
+  generation on cold infrastructure is still the main latency risk.
