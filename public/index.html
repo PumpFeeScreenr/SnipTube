@@ -959,12 +959,12 @@ function getPreviewAssetUrl(){
 function configurePreviewVideoElement(video, {direct = false} = {}){
   if(!video) return;
   if(direct){
-    video.crossOrigin = 'anonymous';
-    video.referrerPolicy = 'no-referrer';
+    video.preload = 'auto';
   }else{
-    video.removeAttribute('crossorigin');
-    video.removeAttribute('referrerpolicy');
+    video.preload = 'metadata';
   }
+  video.removeAttribute('crossorigin');
+  video.removeAttribute('referrerpolicy');
 }
 
 function getYouTubePlayerVars(){
@@ -1132,6 +1132,7 @@ async function loadWorkerPreview(options = {}){
   const preview = $('vid-preview');
   const isTwitter = looksTwitter(currentUrl);
   const isDirectPreview = Boolean(directPreviewUrl);
+  let retriedDirectPreview = false;
 
   destroyYouTubePlayer();
   destroyWorkerPreview({resetPendingSeek: false, invalidateToken: false});
@@ -1141,14 +1142,32 @@ async function loadWorkerPreview(options = {}){
   workerPreviewPendingSeek = getPreviewSeekTarget(focus);
 
   preview.style.display = 'block';
-  preview.innerHTML = '<video id=\"worker-preview\" controls playsinline preload=\"metadata\"></video>';
+  preview.innerHTML = `<video id="worker-preview" controls playsinline preload="${isDirectPreview ? 'auto' : 'metadata'}"></video>`;
 
   const video = document.getElementById('worker-preview');
   const previewUrl = getPreviewAssetUrl();
   configurePreviewVideoElement(video, {direct: isDirectPreview});
+  const retryDirectPreviewLoad = () => {
+    if(!isDirectPreview || retriedDirectPreview || loadToken !== previewLoadToken) return false;
+    retriedDirectPreview = true;
+    clearTimeout(previewLoadTimer);
+    previewLoadTimer = null;
+    try{ video.pause(); }catch(err){}
+    video.removeAttribute('src');
+    video.load();
+    video.preload = 'auto';
+    video.src = previewUrl;
+    video.load();
+    previewLoadTimer = window.setTimeout(() => {
+      if(loadToken !== previewLoadToken || previewMode !== 'worker') return;
+      showPreviewFallback('Preview timed out for this X post. Export still works.', 'error');
+    }, DIRECT_PREVIEW_METADATA_TIMEOUT_MS);
+    return true;
+  };
   clearTimeout(previewLoadTimer);
   previewLoadTimer = window.setTimeout(() => {
     if(loadToken !== previewLoadToken || previewMode !== 'worker') return;
+    if(retryDirectPreviewLoad()) return;
     showPreviewFallback(
       isTwitter
         ? 'Preview timed out for this X post. Export still works.'
@@ -1227,6 +1246,7 @@ async function loadWorkerPreview(options = {}){
     if(loadToken !== previewLoadToken) return;
     clearTimeout(previewLoadTimer);
     previewLoadTimer = null;
+    if(retryDirectPreviewLoad()) return;
     showPreviewFallback(
       isTwitter
         ? 'Preview failed for this X post. Export still works.'
